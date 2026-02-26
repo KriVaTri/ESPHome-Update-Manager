@@ -19,7 +19,7 @@ A custom Home Assistant integration that provides a dedicated panel for managing
 
 - Home Assistant 2024.1 or newer
 - ESPHome integration configured with one or more devices
-- ESPHome Device Builder (Dashboard) add-on installed
+- ESPHome Device Builder (Dashboard) add-on installed and populated with the devices
 
 ## Recommendations
 
