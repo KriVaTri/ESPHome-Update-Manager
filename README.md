@@ -65,7 +65,7 @@ The panel shows all ESPHome devices with:
 | ☑️ Checkbox | Select devices for batch update |
 | 🟢🔴🟡 Status | Online, offline, or unknown |
 | Name | Device name |
-| Version | Current version → available version |
+| Version | Current version → available version or current version only if up-to-date|
 | Button | Action button (see below) |
 
 ### Device buttons
