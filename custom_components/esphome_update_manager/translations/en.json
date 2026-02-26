@@ -1,0 +1,13 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "ESPHome Update Manager",
+        "description": "Click 'Submit' to install the ESPHome Update Manager."
+      }
+    },
+    "abort": {
+      "already_configured": "Already configured."
+    }
+  }
+}
