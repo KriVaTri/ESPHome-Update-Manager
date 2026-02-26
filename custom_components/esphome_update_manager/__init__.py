@@ -53,7 +53,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     await hass.async_add_executor_job(_copy_frontend, source, dest_dir, dest)
 
-    # Lees versie uit manifest.json
+    # Read version from manifest.json
     manifest_path = Path(__file__).parent / "manifest.json"
     manifest = await hass.async_add_executor_job(_read_manifest, manifest_path)
     version = manifest.get("version", "0.0.0")
