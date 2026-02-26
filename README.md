@@ -22,7 +22,7 @@ A custom Home Assistant integration that provides a dedicated panel for managing
 
 ## Recommendations
 
-- add the following binary_sensor to your devive yaml files
+- add the following binary_sensor to your device yaml file
   ```
   binary_sensor:
     - platform: status
