@@ -1,5 +1,6 @@
 # ESPHome Update Manager
 ESPHome device update manager for Home Assistant.
+
 A custom Home Assistant integration that provides a dedicated panel for managing firmware updates across all your ESPHome devices.
 
 ## Features
