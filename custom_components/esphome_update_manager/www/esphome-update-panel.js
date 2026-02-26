@@ -587,7 +587,7 @@ class ESPHomeUpdatePanel extends LitElement {
 
     return html`
       <h1>
-        <img src="https://raw.githubusercontent.com/KriVaTri/ESPHome-Update-Manager/refs/heads/main/logo/logo.png"
+        <img src="https://github.com/KriVaTri/ESPHome-Update-Manager/blob/main/custom_components/esphome_update_manager/brand/logo.png?raw=true"
             style="height: 50px; vertical-align: middle; margin-right: 8px;">
         ESPHome Update Manager
       </h1>
