@@ -25,8 +25,8 @@ A custom Home Assistant integration that provides a dedicated panel for managing
 - add the following binary_sensor to your devive yaml files
   ```
   binary_sensor:
-  - platform: status
-    name: "Status"
+    - platform: status
+      name: "Status"
   ```
     
 ## Installation
