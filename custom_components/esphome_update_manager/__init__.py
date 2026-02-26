@@ -15,6 +15,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import config_validation as cv
 
 from .const import DOMAIN
 from .update_queue import UpdateQueue
@@ -23,6 +24,8 @@ _LOGGER = logging.getLogger(__name__)
 
 BUILDER_ENTITY_ID = "update.esphome_device_builder_update"
 VSCODE_ADDON_SLUG = "a0d7b954_vscode"
+
+CONFIG_SCHEMA = cv.empty_config_schema(DOMAIN)
 
 
 async def async_setup(hass: HomeAssistant, config: dict) -> bool:
