@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import shutil
 import logging
+import json
 import re
 from typing import Any
 from pathlib import Path
@@ -52,6 +53,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     await hass.async_add_executor_job(_copy_frontend, source, dest_dir, dest)
 
+    # Lees versie uit manifest.json
+    manifest_path = Path(__file__).parent / "manifest.json"
+    manifest = await hass.async_add_executor_job(_read_manifest, manifest_path)
+    version = manifest.get("version", "0.0.0")
+
     # Only register panel if not already registered
     if "esphome-update-manager" not in hass.data.get("frontend_panels", {}):
         async_register_built_in_panel(
@@ -63,7 +69,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             config={
                 "_panel_custom": {
                     "name": "esphome-update-panel",
-                    "module_url": "/local/esphome-update-manager/esphome-update-panel.js?v=0.4.3",
+                    "module_url": f"/local/esphome-update-manager/esphome-update-panel.js?v={version}",
                 }
             },
         )
@@ -77,9 +83,16 @@ def _copy_frontend(source: Path, dest_dir: Path, dest: Path) -> None:
     shutil.copy2(source, dest)
 
 
+def _read_manifest(manifest_path: Path) -> dict:
+    """Read manifest.json file."""
+    with open(manifest_path) as f:
+        return json.load(f)
+
+
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data[DOMAIN].pop("queue", None)
     return True
+
 
 # ── Supervisor / Add-on helpers ────────────────────────────────────
 
@@ -362,7 +375,7 @@ def _get_esphome_update_entities(hass: HomeAssistant) -> list[dict[str, Any]]:
     return devices
 
 
-# ── WebSocket Commands ─────────────────────────────────────────────
+# ── WebSocket Commands ──────────────��──────────────────────────────
 
 @websocket_api.websocket_command({"type": "esphome_update_manager/devices"})
 @callback
