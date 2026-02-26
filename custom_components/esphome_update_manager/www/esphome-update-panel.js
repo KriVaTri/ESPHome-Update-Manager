@@ -719,6 +719,7 @@ if (!customElements.get("esphome-update-panel")) {
 
     if (document.visibilityState === 'visible') {
       const inactiveTime = Date.now() - lastActiveTime;
+      const isOnPanel = window.location.pathname.includes('esphome-update-manager');
       if (inactiveTime > INACTIVE_THRESHOLD) {
         location.reload();
       }
