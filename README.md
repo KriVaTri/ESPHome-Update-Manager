@@ -1,4 +1,7 @@
 # ESPHome Update Manager
+
+[![Latest Release](https://img.shields.io/github/v/release/KriVaTri/esphome-update-manager?include_prereleases&label=release)](https://github.com/KriVaTri/ESPHome-Update-Manager/releases)
+
 ESPHome device update manager for Home Assistant.
 
 A custom Home Assistant integration that provides a dedicated panel for managing firmware updates across all your ESPHome devices.
