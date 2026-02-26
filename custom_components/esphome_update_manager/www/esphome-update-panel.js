@@ -705,3 +705,23 @@ class ESPHomeUpdatePanel extends LitElement {
 if (!customElements.get("esphome-update-panel")) {
   customElements.define("esphome-update-panel", ESPHomeUpdatePanel);
 }
+
+// ── Auto reload ─────────────────────────────────────────────────
+
+(function() {
+  let lastActiveTime = Date.now();
+  const INACTIVE_THRESHOLD = 300000; // 5 minutes
+
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') {
+      lastActiveTime = Date.now();
+    }
+
+    if (document.visibilityState === 'visible') {
+      const inactiveTime = Date.now() - lastActiveTime;
+      if (inactiveTime > INACTIVE_THRESHOLD) {
+        location.reload();
+      }
+    }
+  });
+})();
