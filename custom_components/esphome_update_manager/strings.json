@@ -1,0 +1,13 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "ESPHome Update Manager",
+        "description": "Set up the ESPHome Update Manager panel."
+      }
+    },
+    "abort": {
+      "already_configured": "Already configured."
+    }
+  }
+}
