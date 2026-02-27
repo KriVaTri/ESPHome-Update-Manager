@@ -500,7 +500,6 @@ class ESPHomeUpdatePanel extends LitElement {
         text-transform: uppercase;
         letter-spacing: 0.5px;
       }
-      .device-list-header:hover { background: transparent !important; }
       .device-list-header .header-label { font-weight: 700; color: var(--primary-text-color); }
       .btn-placeholder {
         display: inline-flex;
