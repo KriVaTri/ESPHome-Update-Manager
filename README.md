@@ -145,7 +145,7 @@ The integration handles various failure scenarios gracefully:
 
 ### Update in progress
 
-<img width="700" height="380" alt="update2" src="https://github.com/user-attachments/assets/6caf40dd-5ae8-40f2-970a-8a3cee4bfeda" />
+<img width="700" height="430" alt="update2" src="https://github.com/user-attachments/assets/6caf40dd-5ae8-40f2-970a-8a3cee4bfeda" />
 
 
 ### Update successful
