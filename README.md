@@ -135,23 +135,6 @@ The integration handles various failure scenarios gracefully:
 
 `A failed device never blocks the rest of the queue. Only an explicit cancel stops all remaining updates.`
 
-## File structure
-
-```
-config/
-├── custom_components/
-│   └── esphome_update_manager/
-│       ├── __init__.py          # Integration setup, WS commands, Supervisor API
-│       ├── manifest.json        # Integration manifest
-│       ├── config_flow.py       # Config flow for UI setup
-│       ├── const.py             # Constants
-│       ├── strings.json         # UI strings
-│       └── update_queue.py      # Sequential update queue manager
-└── www/
-    └── esphome-update-manager/
-        └── esphome-update-panel.js  # Frontend panel
-```
-
 ## Troubleshooting
 
 ### Panel does not appear in sidebar
