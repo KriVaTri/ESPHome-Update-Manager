@@ -485,13 +485,13 @@ class ESPHomeUpdatePanel extends LitElement {
 
       /* Header row */
       .device-list-header {
-        border-bottom: 1.5px solid #eee;
+        border-bottom: 1.5px solid var(--secondary-text-color, #888);
         font-size: 1em;
         text-transform: uppercase;
         letter-spacing: 0.5px;
       }
       .device-list-header:hover { background: transparent !important; }
-      .device-list-header .header-label { font-weight: 700; color: #ffffff; }
+      .device-list-header .header-label { font-weight: 700; color: var(--primary-text-color); }
       .btn-placeholder {
         display: inline-flex;
         align-items: center;
