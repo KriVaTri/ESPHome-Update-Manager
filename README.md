@@ -76,7 +76,7 @@ The panel shows all ESPHome devices with:
 
 | Button | Meaning |
 |--------|---------|
-| **Update** (blue) | Update available — click to start |
+| **Update** (blue) | Update ready to install — click to start |
 | **Up to date** (green) | Device is on the latest firmware |
 | **Enable** (orange) | Firmware entity is disabled — click to enable |
 | **Enabling…** (orange + spinner) | Entity is being enabled, waiting for HA to pick it up |
