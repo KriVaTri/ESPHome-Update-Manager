@@ -465,10 +465,19 @@ class ESPHomeUpdatePanel extends LitElement {
     return css`
       :host {
         display: block;
-        padding: 16px;
+        padding: 0;
         font-family: var(--paper-font-body1_-_font-family, "Roboto", sans-serif);
       }
-      h1 { margin: 0 0 16px; }
+      h1 { 
+        margin: 0 0 16px; 
+        padding: 8px 16px;
+        background: var(--secondary-background-color, #e0e0e0);
+        display: flex;
+        align-items: center;
+      }
+      .content {
+        padding: 0 16px 16px;
+      }
 
       .toolbar {
         display: flex; align-items: center; gap: 8px;
@@ -588,10 +597,12 @@ class ESPHomeUpdatePanel extends LitElement {
     return html`
       <h1>
         <img src="/local/esphome-update-manager/logo.png"
-            style="height: 50px; vertical-align: middle; margin-right: 8px;">
+            style="height: 40px; vertical-align: middle; margin-right: 12px;">
         ESPHome Update Manager
+        ${this._version ? html`<span class="version-badge">v${this._version}</span>` : ""}
       </h1>
-      <div class="summary">
+      <div class="content">
+        <div class="summary">
         ${merged.length} devices
         — ${onlineCount} online, ${offlineCount} offline${unknownCount > 0 ? html`, ${unknownCount} unknown` : ""}
       </div>
