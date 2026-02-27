@@ -140,15 +140,15 @@ The integration handles various failure scenarios gracefully:
 
 ### Update ready to install
 
-<img width="500" height="270" alt="update1" src="https://github.com/user-attachments/assets/ec82f538-0bd4-4c8f-82fd-167f895d838c" />
+<img width="700" height="380" alt="update1" src="https://github.com/user-attachments/assets/ec82f538-0bd4-4c8f-82fd-167f895d838c" />
 
 ### Update in progress
 
-<img width="500" height="270" alt="update2" src="https://github.com/user-attachments/assets/6caf40dd-5ae8-40f2-970a-8a3cee4bfeda" />
+<img width="700" height="380" alt="update2" src="https://github.com/user-attachments/assets/6caf40dd-5ae8-40f2-970a-8a3cee4bfeda" />
 
 ### Update successful
 
-<img width="500" height="270" alt="update3" src="https://github.com/user-attachments/assets/1ddbae11-7689-4f39-9f3f-ac6efb445a0e" />
+<img width="700" height="380" alt="update3" src="https://github.com/user-attachments/assets/1ddbae11-7689-4f39-9f3f-ac6efb445a0e" />
 
 
 ## Troubleshooting
