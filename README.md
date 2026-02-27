@@ -88,7 +88,7 @@ The panel shows all ESPHome devices with:
 
 1. Select devices using the checkboxes (or click **Select all**)
 2. Click **▶ Update selected (n)**
-3. Devices are updated one by one sequentially
+3. Devices are updated sequentially
 4. Progress and results are shown in real-time
 5. Click **⏹ Cancel** to stop the queue at any time
 
