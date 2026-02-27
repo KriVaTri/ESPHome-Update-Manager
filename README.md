@@ -49,8 +49,7 @@ A custom Home Assistant integration that provides a dedicated panel for managing
 ### Manual installation
 
 1. Copy the `custom_components/esphome_update_manager` folder to your Home Assistant `config/custom_components/` directory
-2. Copy `esphome-update-panel.js` to `config/www/esphome-update-manager/esphome-update-panel.js`
-3. Restart Home Assistant
+2. Restart Home Assistant
 
 ## Setup
 
