@@ -142,9 +142,11 @@ The integration handles various failure scenarios gracefully:
 
 <img width="700" height="380" alt="update1" src="https://github.com/user-attachments/assets/ec82f538-0bd4-4c8f-82fd-167f895d838c" />
 
+
 ### Update in progress
 
 <img width="700" height="380" alt="update2" src="https://github.com/user-attachments/assets/6caf40dd-5ae8-40f2-970a-8a3cee4bfeda" />
+
 
 ### Update successful
 
