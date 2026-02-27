@@ -562,8 +562,8 @@ class ESPHomeUpdatePanel extends LitElement {
       .addon-option input[type="checkbox"] { margin: 0; }
       .addon-option .addon-name { color: #ff9800; font-weight: 500; }
       .addon-option .addon-status { margin-left: auto; font-size: 0.85em; }
-      .addon-running { color: #4caf50; }
-      .addon-stopped { color: #f44336; }
+      .addon-running { color: #4caf50; margin-right: 10px; }
+      .addon-stopped { color: #f44336; margin-right: 10px; }
 
       .results { margin-top: 24px; }
       .results-header {
