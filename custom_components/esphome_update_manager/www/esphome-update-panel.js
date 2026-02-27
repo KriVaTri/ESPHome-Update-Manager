@@ -490,6 +490,7 @@ class ESPHomeUpdatePanel extends LitElement {
       .device-row {
         display: flex; align-items: center; gap: 12px;
         padding: 10px 12px; border-bottom: 1px solid #555;
+        background: rgba(128, 128, 128, 0.1);
       }
 
       /* Header row */
