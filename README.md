@@ -133,7 +133,7 @@ The integration handles various failure scenarios gracefully:
 | Device does not recover after OTA | ~2 minutes | Marked as failed, queue continues |
 | Update timeout | ~5 minutes | Marked as failed, queue continues |
 
-**A failed device never blocks the rest of the queue.** Only an explicit cancel stops all remaining updates.
+`A failed device never blocks the rest of the queue.** Only an explicit cancel stops all remaining updates.`
 
 ## File structure
 
