@@ -102,7 +102,7 @@ If the **VS Code Server** (Studio Code Server) add-on is installed, a checkbox a
 - The add-on is always restarted, even if updates are cancelled or fail
 - The current status (Running/Stopped) is polled every 30 seconds
 
-This is useful for systems with limited memory where the VS Code Server add-on can cause ESPHome compilations to fail due to insufficient RAM.
+`This is useful for systems with limited memory where the VS Code Server add-on can cause ESPHome compilations to fail due to insufficient RAM.`
 
 ### Results
 
