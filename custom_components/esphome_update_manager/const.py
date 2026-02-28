@@ -4,7 +4,7 @@ DOMAIN = "esphome_update_manager"
 DEFAULT_UPDATE_TIMEOUT = 600
 
 # Delay between updates (seconds)
-DEFAULT_DELAY_BETWEEN = 5
+DEFAULT_DELAY_BETWEEN = 1
 
 # Device status
 STATUS_QUEUED = "queued"
