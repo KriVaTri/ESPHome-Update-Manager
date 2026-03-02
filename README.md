@@ -113,6 +113,34 @@ A checkbox enables automatic updates:
 - ESPHome is updated and devices now have newer firmware available
 - Home Assistant restarts and devices have pending updates
 
+### Service: Start Updates
+
+The integration provides a service that can be used in automations:
+
+**Service:** `esphome_update_manager.start_updates`
+
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `entity_ids` | No | List of specific entity IDs to update. If not provided, all devices with available updates will be updated. |
+| `stop_addon` | No | Whether to stop VS Code Server during updates. If not provided, uses the saved panel setting. |
+
+#### Example automations
+
+**Update all devices at 3 AM:**
+
+```yaml
+alias: ESPHome start devices update
+description: time to start updating esphome devices
+triggers:
+  - trigger: time
+    at: "02:00:00"
+conditions: []
+actions:
+  - action: esphome_update_manager.start_updates
+    data: {}
+mode: single
+```
+
 ### VS Code Server add-on
 
 If the **VS Code Server** (Studio Code Server) add-on is installed, a checkbox appears:
