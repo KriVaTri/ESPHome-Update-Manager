@@ -339,6 +339,9 @@ class ESPHomeUpdatePanel extends LitElement {
     if (this._backgroundCheckTimer) return;
     
     this._backgroundCheckTimer = setInterval(async () => {
+      // Check URL for show_log parameter (in case notification was clicked)
+      this._checkUrlForLogParam();
+      
       try {
         const res = await this.hass.callWS({ type: "esphome_update_manager/status" });
         
@@ -653,6 +656,8 @@ class ESPHomeUpdatePanel extends LitElement {
         cursor: pointer; font-size: 0.85em; font-weight: 500;
         white-space: nowrap;
         display: inline-flex; align-items: center; gap: 6px;
+        min-height: 32px;
+        box-sizing: border-box;
       }
       button:disabled { cursor: default; }
 
