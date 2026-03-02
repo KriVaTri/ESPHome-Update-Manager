@@ -133,7 +133,7 @@ alias: ESPHome start devices update
 description: time to start updating esphome devices
 triggers:
   - trigger: time
-    at: "02:00:00"
+    at: "03:00:00"
 conditions: []
 actions:
   - action: esphome_update_manager.start_updates
