@@ -156,7 +156,7 @@ When one or more updates fail, a persistent notification is created in Home Assi
 
 > **ESPHome Update Failed**  
 > Update for X ESPHome device(s) has failed.  
-> <u style="color: #2196f3;">View update log</u>
+> *View update log* (clickable link)
 
 Clicking the link opens the panel and automatically displays the update log popup.
 
