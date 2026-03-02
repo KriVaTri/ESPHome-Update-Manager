@@ -190,7 +190,7 @@ The integration handles various failure scenarios gracefully:
 
 ### Update in progress
 
-<img width="700" height="460" alt="update2" src="https://github.com/user-attachments/assets/2f4fa00e-70f5-4063-b6e3-1fa2ec751d2d" />
+<img width="700" height="460" alt="update2" src="https://github.com/user-attachments/assets/fd477355-7e30-43c3-bebd-8205e7cf50e8" />
 
 
 
