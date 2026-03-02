@@ -20,6 +20,10 @@ class ESPHomeUpdatePanel extends LitElement {
       _localResults: { type: Array },
       _addonInfo: { type: Object },
       _stopAddonDuringUpdate: { type: Boolean },
+      _autoUpdateEnabled: { type: Boolean },
+      _showLogPopup: { type: Boolean },
+      _logContent: { type: String },
+      _cancelling: { type: Boolean },
     };
   }
 
@@ -38,14 +42,19 @@ class ESPHomeUpdatePanel extends LitElement {
     this._prevHassStates = null;
     this._addonInfo = null;
     this._addonPollTimer = null;
-    const stored = localStorage.getItem("esphome_update_manager_stop_addon");
-    this._stopAddonDuringUpdate = stored !== null ? stored === "true" : true;
+    this._backgroundCheckTimer = null;
+    this._stopAddonDuringUpdate = true;
+    this._autoUpdateEnabled = false;
+    this._showLogPopup = false;
+    this._logContent = null;
+    this._cancelling = false;
   }
 
   connectedCallback() {
     super.connectedCallback();
     this._loadDevices();
     this._loadAddonInfo();
+    this._loadAutoUpdateSettings();
     this._addonPollTimer = setInterval(() => this._loadAddonInfo(), 30000);
     this._pollStatus().then(() => {
       if (this.running) {
@@ -53,6 +62,12 @@ class ESPHomeUpdatePanel extends LitElement {
         this._startStatusPolling();
       }
     });
+    
+    // Start polling immediately to catch backend-initiated updates
+    this._startBackgroundStatusCheck();
+    
+    // Check URL for show_log parameter
+    this._checkUrlForLogParam();
   }
 
   disconnectedCallback() {
@@ -77,6 +92,20 @@ class ESPHomeUpdatePanel extends LitElement {
     if (this._addonPollTimer) {
       clearInterval(this._addonPollTimer);
       this._addonPollTimer = null;
+    }
+    if (this._backgroundCheckTimer) {
+      clearInterval(this._backgroundCheckTimer);
+      this._backgroundCheckTimer = null;
+    }
+  }
+
+  _checkUrlForLogParam() {
+    const urlParams = new URLSearchParams(window.location.search);
+    if (urlParams.get("show_log") === "1") {
+      this._openLogPopup();
+      // Clean up URL
+      const newUrl = window.location.pathname;
+      window.history.replaceState({}, "", newUrl);
     }
   }
 
@@ -117,6 +146,30 @@ class ESPHomeUpdatePanel extends LitElement {
       this._loadDevices();
       this._loadAddonInfo();
     }, 2000);
+  }
+
+  // ── Log Popup ───────────────────────────────────────────────────
+
+  async _openLogPopup() {
+    try {
+      const res = await this.hass.callWS({ type: "esphome_update_manager/get_update_log" });
+      if (res.exists) {
+        this._logContent = res.content;
+        this._showLogPopup = true;
+      } else {
+        this._logContent = "No update log available yet.";
+        this._showLogPopup = true;
+      }
+    } catch (e) {
+      console.error("Failed to load update log", e);
+      this._logContent = "Failed to load update log.";
+      this._showLogPopup = true;
+    }
+  }
+
+  _closeLogPopup() {
+    this._showLogPopup = false;
+    this._logContent = null;
   }
 
   // ── Results ─────────────────────────────────────────────────────
@@ -233,6 +286,43 @@ class ESPHomeUpdatePanel extends LitElement {
     }
   }
 
+  async _loadAutoUpdateSettings() {
+    try {
+      const res = await this.hass.callWS({ type: "esphome_update_manager/get_auto_update_settings" });
+      this._autoUpdateEnabled = res.auto_update_enabled || false;
+      this._stopAddonDuringUpdate = res.stop_addon_during_update !== false;
+      this.requestUpdate();
+    } catch (e) {
+      console.error("Failed to load auto-update settings", e);
+    }
+  }
+
+  async _saveAutoUpdateSettings() {
+    try {
+      await this.hass.callWS({
+        type: "esphome_update_manager/set_auto_update_settings",
+        auto_update_enabled: this._autoUpdateEnabled,
+        stop_addon_during_update: this._stopAddonDuringUpdate,
+      });
+      
+      // If auto-update was just enabled, poll status after a short delay
+      // to catch any immediate updates (success or failure)
+      if (this._autoUpdateEnabled) {
+        setTimeout(async () => {
+          await this._pollStatus();
+          if (this.running) {
+            this._restoreUpdatingState();
+            this._startStatusPolling();
+          }
+          await this._loadDevices();
+          this.requestUpdate();
+        }, 2000);
+      }
+    } catch (e) {
+      console.error("Failed to save auto-update settings", e);
+    }
+  }
+
   _startEnablingPoll() {
     this._enablingPollTimer = setInterval(() => this._loadDevices(), 5000);
   }
@@ -242,6 +332,39 @@ class ESPHomeUpdatePanel extends LitElement {
       clearInterval(this._enablingPollTimer);
       this._enablingPollTimer = null;
     }
+  }
+
+  _startBackgroundStatusCheck() {
+    // Check every 5 seconds if an update was started from backend
+    if (this._backgroundCheckTimer) return;
+    
+    this._backgroundCheckTimer = setInterval(async () => {
+      try {
+        const res = await this.hass.callWS({ type: "esphome_update_manager/status" });
+        
+        if (res.running && !this.running) {
+          // Backend started an update, sync our state
+          this.running = true;
+          this.results = res.results || [];
+          this._restoreUpdatingState();
+          this._startStatusPolling();
+          this._loadDevices();
+          this.requestUpdate();
+        } else if (!res.running && this.running) {
+          // Backend finished but we still think it's running
+          this.running = false;
+          this.results = res.results || [];
+          this._clearAllUpdatingTimers();
+          this._cancelling = false;
+          this.selected.clear();
+          await this._loadDevices();
+          await this._loadAddonInfo();
+          this.requestUpdate();
+        }
+      } catch (e) {
+        // Ignore errors
+      }
+    }, 5000);
   }
 
   async _pollStatus() {
@@ -370,8 +493,14 @@ class ESPHomeUpdatePanel extends LitElement {
   }
 
   async _cancelUpdates() {
-    try { await this.hass.callWS({ type: "esphome_update_manager/cancel" }); }
-    catch (e) { console.error("Cancel failed:", e); }
+    this._cancelling = true;
+    this.requestUpdate();
+    try {
+      await this.hass.callWS({ type: "esphome_update_manager/cancel" });
+    } catch (e) {
+      console.error("Cancel failed:", e);
+    }
+    // _cancelling will be reset when running becomes false
   }
 
   async _clearResults() {
@@ -393,6 +522,7 @@ class ESPHomeUpdatePanel extends LitElement {
         clearInterval(this._pollInterval);
         this._pollInterval = null;
         this._clearAllUpdatingTimers();
+        this._cancelling = false;
         this.selected.clear();
         await this._loadDevices();
         await this._loadAddonInfo();
@@ -534,12 +664,16 @@ class ESPHomeUpdatePanel extends LitElement {
       .btn-update:hover:not(:disabled) { background: #1976d2; }
       .btn-updating { background: #2196f3; color: white; opacity: 0.9; }
       .btn-unavailable { background: #90caf9; color: white; opacity: 0.7; }
-      .btn-offline { background: #666; color: white; opacity: 0.8;}
+      .btn-offline { background: #666; color: white; opacity: 0.8; }
 
       .btn-select-all { background: #666; color: white; }
+      .btn-select-all:hover { background: #555; }
       .btn-batch-update { background: #2196f3; color: white; }
       .btn-batch-update:hover:not(:disabled) { background: #1976d2; }
+      
       .btn-cancel { background: #f44336; color: white; }
+      .btn-cancel:hover:not(:disabled) { background: #c62828; }
+      .btn-cancel:disabled { opacity: 0.7; cursor: not-allowed; }
 
       .spinner {
         display: inline-block;
@@ -574,11 +708,77 @@ class ESPHomeUpdatePanel extends LitElement {
         border-radius: 16px; padding: 4px 12px; font-size: 0.8em;
       }
       .btn-clear:hover { background: #f5f5f5; color: #666; }
+      .btn-log {
+        background: #666; color: white;
+        border-radius: 16px; padding: 4px 12px; font-size: 0.8em;
+      }
+      .btn-log:hover { background: #555; }
       .result-row {
         display: flex; align-items: center; gap: 8px;
         padding: 4px 0;
       }
       .summary { color: #666; font-size: 0.9em; margin: 8px 0; }
+
+      /* Log Popup */
+      .log-overlay {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(0, 0, 0, 0.7);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 1000;
+      }
+      .log-popup {
+        background: var(--card-background-color, #1c1c1c);
+        border-radius: 12px;
+        width: 90%;
+        max-width: 700px;
+        max-height: 80vh;
+        display: flex;
+        flex-direction: column;
+        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+      }
+      .log-popup-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 16px 20px;
+        border-bottom: 1px solid #444;
+      }
+      .log-popup-header h2 {
+        margin: 0;
+        font-size: 1.2em;
+      }
+      .log-popup-close {
+        background: none;
+        border: none;
+        color: #999;
+        font-size: 1.5em;
+        cursor: pointer;
+        padding: 0;
+        line-height: 1;
+      }
+      .log-popup-close:hover {
+        color: #fff;
+      }
+      .log-popup-content {
+        flex: 1;
+        overflow: auto;
+        padding: 16px 20px;
+      }
+      .log-popup-content pre {
+        margin: 0;
+        white-space: pre-wrap;
+        word-wrap: break-word;
+        font-family: monospace;
+        font-size: 0.85em;
+        line-height: 1.5;
+        color: #ccc;
+      }
     `;
   }
 
@@ -595,6 +795,8 @@ class ESPHomeUpdatePanel extends LitElement {
     const showAddonOption = this._addonInfo?.installed;
 
     return html`
+      ${this._showLogPopup ? this._renderLogPopup() : ""}
+      
       <h1>
         <img src="/local/esphome-update-manager/logo.png"
             style="height: 40px; vertical-align: middle; margin-right: 12px;">
@@ -603,58 +805,78 @@ class ESPHomeUpdatePanel extends LitElement {
       </h1>
       <div class="content">
         <div class="summary">
-        ${merged.length} devices
-        — ${onlineCount} online, ${offlineCount} offline${unknownCount > 0 ? html`, ${unknownCount} unknown` : ""}
-      </div>
+          ${merged.length} devices
+          — ${onlineCount} online, ${offlineCount} offline${unknownCount > 0 ? html`, ${unknownCount} unknown` : ""}
+        </div>
 
-      ${showAddonOption ? html`
+        ${showAddonOption ? html`
+          <div class="addon-option">
+            <input type="checkbox"
+              .checked=${this._stopAddonDuringUpdate}
+              @change=${(e) => {
+                this._stopAddonDuringUpdate = e.target.checked;
+                this._saveAutoUpdateSettings();
+              }} />
+            <span>Stop <span class="addon-name">${this._addonInfo.name}</span> during updates to free memory</span>
+            ${this._addonInfo.running
+              ? html`<span class="addon-status addon-running">● Running</span>`
+              : html`<span class="addon-status addon-stopped">● Stopped</span>`
+            }
+          </div>
+        ` : ""}
+
         <div class="addon-option">
           <input type="checkbox"
-            .checked=${this._stopAddonDuringUpdate}
+            .checked=${this._autoUpdateEnabled}
             @change=${(e) => {
-              this._stopAddonDuringUpdate = e.target.checked;
-              localStorage.setItem("esphome_update_manager_stop_addon", e.target.checked);
+              this._autoUpdateEnabled = e.target.checked;
+              this._saveAutoUpdateSettings();
             }} />
-          <span>Stop <span class="addon-name">${this._addonInfo.name}</span> during updates to free memory</span>
-          ${this._addonInfo.running
-            ? html`<span class="addon-status addon-running">● Running</span>`
-            : html`<span class="addon-status addon-stopped">● Stopped</span>`
+          <span>Automatically start updates when available</span>
+          ${this._autoUpdateEnabled
+            ? html`<span class="addon-status addon-running">● Enabled</span>`
+            : html`<span class="addon-status addon-stopped">● Disabled</span>`
           }
         </div>
-      ` : ""}
 
-      ${selectableCount > 0 || this.running ? html`
-        <div class="toolbar">
-          ${this.running ? html`
-            <button class="btn-cancel" @click=${this._cancelUpdates}>⏹ Cancel</button>
-            <span class="toolbar-info">Updating…</span>
-          ` : html`
-            <button class="btn-select-all" @click=${this._selectAll}>
-              ${this.selected.size === selectableCount ? "Deselect all" : "Select all"}
-            </button>
-            <button class="btn-batch-update"
-              ?disabled=${this.selected.size === 0}
-              @click=${this._startBatchUpdate}>
-              ▶ Update selected (${this.selected.size})
-            </button>
-            <span class="toolbar-info">${selectableCount} device${selectableCount !== 1 ? "s" : ""} can be updated</span>
-          `}
+        ${selectableCount > 0 || this.running ? html`
+          <div class="toolbar">
+            ${this.running ? html`
+              <button class="btn-cancel" 
+                ?disabled=${this._cancelling}
+                @click=${this._cancelUpdates}>
+                ${this._cancelling ? html`<span class="spinner"></span>` : ""}
+                ${this._cancelling ? "Cancelling…" : "⏹ Cancel"}
+              </button>
+              <span class="toolbar-info">${this._cancelling ? "Cancelling…" : "Updating…"}</span>
+            ` : html`
+              <button class="btn-select-all" @click=${this._selectAll}>
+                ${this.selected.size === selectableCount ? "Deselect all" : "Select all"}
+              </button>
+              <button class="btn-batch-update"
+                ?disabled=${this.selected.size === 0}
+                @click=${this._startBatchUpdate}>
+                ▶ Update selected (${this.selected.size})
+              </button>
+              <span class="toolbar-info">${selectableCount} device${selectableCount !== 1 ? "s" : ""} can be updated</span>
+            `}
+          </div>
+        ` : ""}
+
+        <div class="device-row device-list-header">
+          <span class="checkbox-col"></span>
+          <span class="online-status"></span>
+          <span class="name header-label">DEVICES</span>
+          <span class="version"></span>
+          <span class="header-label btn-placeholder">FIRMWARE</span>
         </div>
-      ` : ""}
 
-      <div class="device-row device-list-header">
-        <span class="checkbox-col"></span>
-        <span class="online-status"></span>
-        <span class="name header-label">DEVICES</span>
-        <span class="version"></span>
-        <span class="header-label btn-placeholder">FIRMWARE</span>
+        <div class="device-list">
+          ${merged.map((d) => this._renderDevice(d))}
+        </div>
+
+        ${allResults.length > 0 ? this._renderResults(allResults) : ""}
       </div>
-
-      <div class="device-list">
-        ${merged.map((d) => this._renderDevice(d))}
-      </div>
-
-      ${allResults.length > 0 ? this._renderResults(allResults) : ""}
     `;
   }
 
@@ -696,6 +918,7 @@ class ESPHomeUpdatePanel extends LitElement {
       <div class="results">
         <div class="results-header">
           <h3>Results</h3>
+          <button class="btn-log" @click=${this._openLogPopup}>📄 View Log</button>
           ${!this.running ? html`
             <button class="btn-clear" @click=${this._clearResults}>✕ Clear</button>
           ` : ""}
@@ -708,6 +931,24 @@ class ESPHomeUpdatePanel extends LitElement {
             ${r.error ? html`<span style="color:red; font-size:0.85em">— ${r.error}</span>` : ""}
           </div>
         `)}
+      </div>
+    `;
+  }
+
+  _renderLogPopup() {
+    return html`
+      <div class="log-overlay" @click=${(e) => {
+        if (e.target.classList.contains("log-overlay")) this._closeLogPopup();
+      }}>
+        <div class="log-popup">
+          <div class="log-popup-header">
+            <h2>📄 Update Log</h2>
+            <button class="log-popup-close" @click=${this._closeLogPopup}>✕</button>
+          </div>
+          <div class="log-popup-content">
+            <pre>${this._logContent || "Loading..."}</pre>
+          </div>
+        </div>
       </div>
     `;
   }
