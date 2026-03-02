@@ -918,8 +918,8 @@ class ESPHomeUpdatePanel extends LitElement {
       <div class="results">
         <div class="results-header">
           <h3>Results</h3>
-          <button class="btn-log" @click=${this._openLogPopup}>📄 View Log</button>
           ${!this.running ? html`
+            <button class="btn-log" @click=${this._openLogPopup}>📄 View Log</button>
             <button class="btn-clear" @click=${this._clearResults}>✕ Clear</button>
           ` : ""}
         </div>
