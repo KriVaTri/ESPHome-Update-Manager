@@ -1,0 +1,21 @@
+start_updates:
+  name: Start Updates
+  description: Start updates for all ESPHome devices that have updates available.
+  fields:
+    entity_ids:
+      name: Entity IDs
+      description: Optional list of specific entity IDs to update. If not provided, all devices with available updates will be updated.
+      required: false
+      example: "['update.esp_test_firmware', 'update.esp_living_firmware']"
+      selector:
+        entity:
+          multiple: true
+          filter:
+            domain: update
+    stop_addon:
+      name: Stop VS Code Server
+      description: Whether to stop the VS Code Server add-on during updates. If not provided, uses the saved setting.
+      required: false
+      example: true
+      selector:
+        boolean:
