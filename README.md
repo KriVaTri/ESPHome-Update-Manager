@@ -108,6 +108,7 @@ A checkbox enables automatic updates:
 - The setting persists across Home Assistant restarts
 
 **Note:** Auto-update triggers when a device transitions to having an update available. This happens when:
+- The auto-update option is enabled and devices have pending updates
 - A device comes online and has a pending update
 - ESPHome is updated and devices now have newer firmware available
 - Home Assistant restarts and devices have pending updates
