@@ -14,7 +14,7 @@ import voluptuous as vol
 
 from homeassistant.components import websocket_api
 from homeassistant.components.frontend import async_register_built_in_panel
-from homeassistant.core import HomeAssistant, callback, Event
+from homeassistant.core import HomeAssistant, callback, Event, ServiceCall
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import device_registry as dr
@@ -126,6 +126,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     
     unsub_finished = hass.bus.async_listen("esphome_update_manager_finished", _handle_update_finished)
     hass.data[DOMAIN]["unsub_finished"] = unsub_finished
+
+    # Register services
+    async def _handle_start_updates(call: ServiceCall) -> None:
+        await async_handle_start_updates(hass, call)
+    
+    hass.services.async_register(
+        DOMAIN,
+        "start_updates",
+        _handle_start_updates,
+        schema=vol.Schema({
+            vol.Optional("entity_ids"): vol.All(cv.ensure_list, [cv.entity_id]),
+            vol.Optional("stop_addon"): cv.boolean,
+        }),
+    )
 
     # Setup auto-update listener if enabled (after HA is fully started)
     if stored_settings.get("auto_update_enabled", False):
@@ -263,6 +277,9 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     unsub_finished = hass.data[DOMAIN].get("unsub_finished")
     if unsub_finished:
         unsub_finished()
+    
+    # Remove services
+    hass.services.async_remove(DOMAIN, "start_updates")
     
     hass.data[DOMAIN].pop("queue", None)
     hass.data[DOMAIN].pop("store", None)
@@ -441,6 +458,62 @@ async def _remove_auto_update_listener(hass: HomeAssistant) -> None:
         unsub()
     hass.data[DOMAIN]["unsubscribe_listeners"] = []
     _LOGGER.info("Auto-update listener removed")
+
+
+# ── Service handlers ───────────────────────────────────────────────
+
+async def async_handle_start_updates(hass: HomeAssistant, call: ServiceCall) -> None:
+    """Handle the start_updates service call."""
+    queue: UpdateQueue = hass.data[DOMAIN]["queue"]
+    settings = hass.data[DOMAIN].get("settings", {})
+    
+    # Don't start if already running
+    if queue.is_running:
+        _LOGGER.warning("Update queue already running, ignoring service call")
+        return
+    
+    # Get entity_ids from service call or find all updatable devices
+    entity_ids = call.data.get("entity_ids")
+    
+    if entity_ids:
+        # Use provided entity IDs
+        updatable = list(entity_ids)
+    else:
+        # Find all devices with available updates
+        devices = _get_esphome_update_entities(hass)
+        updatable = [
+            d["entity_id"]
+            for d in devices
+            if d["entity_id"]
+            and d["update_available"]
+            and not d["firmware_disabled"]
+            and not d["firmware_unavailable"]
+            and not d["enabling"]
+            and d["online"] is not False
+            and not d["in_progress"]
+        ]
+    
+    if not updatable:
+        _LOGGER.info("No devices available for update")
+        return
+    
+    _LOGGER.info("Starting updates via service for %d devices: %s", len(updatable), updatable)
+    
+    # Check if VS Code Server should be stopped
+    stop_addon = call.data.get("stop_addon")
+    if stop_addon is None:
+        stop_addon = settings.get("stop_addon_during_update", True)
+    
+    stop_addon_slug = None
+    if stop_addon:
+        addon_info = await async_get_addon_info(hass, VSCODE_ADDON_SLUG)
+        if addon_info and addon_info.get("state") == "started":
+            stop_addon_slug = VSCODE_ADDON_SLUG
+    
+    try:
+        queue.start(updatable, stop_addon_slug=stop_addon_slug)
+    except RuntimeError as err:
+        _LOGGER.warning("Failed to start updates via service: %s", err)
 
 
 # ── Supervisor / Add-on helpers ────────────────────────────────────
