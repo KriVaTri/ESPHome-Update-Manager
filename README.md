@@ -156,9 +156,17 @@ When one or more updates fail, a persistent notification is created in Home Assi
 
 > **ESPHome Update Failed**  
 > Update for X ESPHome device(s) has failed.  
-> *View update log* (clickable link)
+> [View update log](/esphome-update-manager?show_log=1)
 
 Clicking the link opens the panel and automatically displays the update log popup.
+
+<details>
+<summary>📄 Example update log</summary>
+
+<img src="https://github.com/user-attachments/assets/3c96ee1f-6c0a-463f-a180-8c390f4ad62f" alt="Update Log Example" width="600" />
+
+
+</details>
 
 ## Error handling
 
