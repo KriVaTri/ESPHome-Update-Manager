@@ -163,8 +163,7 @@ Clicking the link opens the panel and automatically displays the update log popu
 <details>
 <summary>📄 Example update log</summary>
 
-<img src="https://github.com/user-attachments/assets/3c96ee1f-6c0a-463f-a180-8c390f4ad62f" alt="Update Log Example" width="600" />
-
+<img width="500" height="375" alt="log" src="https://github.com/user-attachments/assets/cb85685f-08d6-4714-98c4-38bdca3f6fe8" />
 
 </details>
 
