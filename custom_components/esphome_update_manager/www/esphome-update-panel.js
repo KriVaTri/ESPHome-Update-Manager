@@ -709,10 +709,10 @@ class ESPHomeUpdatePanel extends LitElement {
       }
       .results-header h3 { margin: 0; flex: 1; }
       .btn-clear {
-        background: none; color: #999; border: 1px solid #ddd;
+        background: none; color: #f44336; border: 1px solid #888;
         border-radius: 16px; padding: 4px 12px; font-size: 0.8em;
       }
-      .btn-clear:hover { background: #f5f5f5; color: #666; }
+      .btn-clear:hover { background: #ccc; color: #333; }
       .btn-log {
         background: #666; color: white;
         border-radius: 16px; padding: 4px 12px; font-size: 0.8em;
@@ -768,7 +768,7 @@ class ESPHomeUpdatePanel extends LitElement {
         line-height: 1;
       }
       .log-popup-close:hover {
-        color: #fff;
+        color: #f44336;
       }
       .log-popup-content {
         flex: 1;
@@ -782,7 +782,7 @@ class ESPHomeUpdatePanel extends LitElement {
         font-family: monospace;
         font-size: 0.85em;
         line-height: 1.5;
-        color: #ccc;
+        color: var(--primary-text-color, #111);
       }
     `;
   }
