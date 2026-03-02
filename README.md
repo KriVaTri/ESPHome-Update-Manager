@@ -13,8 +13,11 @@ A custom Home Assistant integration that provides a dedicated panel for managing
 - **Centralized dashboard** — View all ESPHome devices, their firmware versions, and online status in one place
 - **Batch updates** — Select multiple devices and update them sequentially with a single click
 - **Individual updates** — Update a single device directly from the panel
+- **Auto-update** — Automatically start updates when new firmware becomes available
 - **Enable firmware entities** — Disabled firmware update entities can be enabled directly from the panel
 - **Smart error handling** — Compile errors, OTA failures, and offline devices are detected and reported immediately
+- **Failure notifications** — Persistent notifications alert you when updates fail, with a link to the update log
+- **Update log** — Detailed log of all update results, viewable directly in the panel
 - **VS Code Server add-on management** — Optionally stop the VS Code Server add-on during updates to free memory, and automatically restart it when updates are complete
 - **Real-time status** — Live progress tracking with online/offline indicators for each device
 - **Resilient queue** — If a device fails, the queue continues with the next device
@@ -28,14 +31,14 @@ A custom Home Assistant integration that provides a dedicated panel for managing
 
 ## Recommendations
 
-- add the following binary_sensor to your device yaml file for improved integration performance and functionality:
+- Add the following binary_sensor to your device yaml file for improved integration performance and functionality:
   
-  ```
+  ```yaml
   binary_sensor:
     - platform: status
       name: "Status"
   ```
-    
+   
 ## Installation
 
 ### HACS (recommended)
@@ -92,6 +95,23 @@ The panel shows all ESPHome devices with:
 4. Progress and results are shown in real-time
 5. Click **⏹ Cancel** to stop the queue at any time
 
+### Auto-update
+
+A checkbox enables automatic updates:
+
+> ☑️ Automatically start updates when available — ● Enabled / ● Disabled
+
+- When enabled, the integration monitors all ESPHome device update entities
+- When a device's firmware state changes to "update available" (e.g., after coming online or after ESPHome is updated), the update starts automatically
+- Auto-updates respect the "Stop VS Code Server" setting
+- Auto-updates work even when the panel is not open
+- The setting persists across Home Assistant restarts
+
+**Note:** Auto-update triggers when a device transitions to having an update available. This happens when:
+- A device comes online and has a pending update
+- ESPHome is updated and devices now have newer firmware available
+- Home Assistant restarts and devices have pending updates
+
 ### VS Code Server add-on
 
 If the **VS Code Server** (Studio Code Server) add-on is installed, a checkbox appears:
@@ -101,6 +121,7 @@ If the **VS Code Server** (Studio Code Server) add-on is installed, a checkbox a
 - When checked, the add-on is automatically stopped before updates begin and restarted after all updates complete
 - The add-on is always restarted, even if updates are cancelled or fail
 - The current status (Running/Stopped) is polled every 30 seconds
+- This setting applies to both manual and auto-updates
 
 `This is useful for systems with limited memory where the VS Code Server add-on can cause ESPHome compilations to fail due to insufficient RAM.`
 
@@ -118,6 +139,26 @@ After updates complete, a results section shows the outcome for each device:
 | 🔄 | Running | Currently updating |
 
 Click **✕ Clear** to dismiss the results.
+
+### Update log
+
+Click **📄 View Log** in the results section to view a detailed log of the last update run. The log includes:
+
+- Timestamp of the update run
+- Summary with success/failed/skipped/cancelled counts
+- Details per device including status, start time, finish time, and any error messages
+
+The log is stored at `config/www/esphome-update-manager/update_log.txt` and is overwritten with each update run.
+
+### Failure notifications
+
+When one or more updates fail, a persistent notification is created in Home Assistant:
+
+> **ESPHome Update Failed**  
+> Update for X ESPHome device(s) has failed.  
+> [View update log](/esphome-update-manager?show_log=1)
+
+Clicking the link opens the panel and automatically displays the update log popup.
 
 ## Error handling
 
@@ -140,17 +181,20 @@ The integration handles various failure scenarios gracefully:
 
 ### Update ready to install
 
-<img width="700" height="432" alt="update1" src="https://github.com/user-attachments/assets/40910c5e-cba9-498b-ac6a-2372ff9043d9" />
+<img width="700" height="460" alt="update1" src="https://github.com/user-attachments/assets/0b44677e-5030-4424-8bca-ff5f369c8b76" />
+
 
 
 ### Update in progress
 
-<img width="700" height="432" alt="update2" src="https://github.com/user-attachments/assets/aa00327e-2cc4-4220-b937-177b0011c53a" />
+<img width="700" height="460" alt="update2" src="https://github.com/user-attachments/assets/2f4fa00e-70f5-4063-b6e3-1fa2ec751d2d" />
+
 
 
 ### Update successful
 
-<img width="700" height="432" alt="update3" src="https://github.com/user-attachments/assets/a927505f-3895-4b53-976e-ffa6969d5dc7" />
+<img width="700" height="460" alt="update3" src="https://github.com/user-attachments/assets/74513810-cfb9-4810-abb6-08f32e90a7c6" />
+
 
 
 ## Troubleshooting
@@ -170,6 +214,16 @@ The integration handles various failure scenarios gracefully:
 ### Updates fail with memory errors
 - Enable the "Stop VS Code Server during updates" option
 - Consider stopping other memory-heavy add-ons manually
+
+### Auto-update does not trigger
+- Ensure the "Automatically start updates when available" checkbox is enabled
+- Check that your devices have the `binary_sensor.status` entity (see Recommendations)
+- Auto-update only triggers on state transitions (e.g., device coming online), not when already in "update available" state
+- Check Home Assistant logs for `esphome_update_manager` entries
+
+### Notification link does not open the log
+- Clear your browser cache and reload the panel
+- Ensure the panel is accessible at `/esphome-update-manager`
 
 ## License
 
