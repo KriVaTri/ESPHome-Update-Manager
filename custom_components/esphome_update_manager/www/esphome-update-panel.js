@@ -792,7 +792,7 @@ class ESPHomeUpdatePanel extends LitElement {
         }
         .device-row {
           padding-left: 10px;
-          padding-right: 16px;
+          padding-right: 10px;
         }
         .toolbar {
           margin-left: 0;
