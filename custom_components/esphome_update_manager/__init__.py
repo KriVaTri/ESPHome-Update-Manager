@@ -446,10 +446,15 @@ async def _check_and_start_auto_update(hass: HomeAssistant) -> None:
         if addon_info and addon_info.get("state") == "started":
             stop_addon_slug = VSCODE_ADDON_SLUG
     
+    # Double-check before starting (race condition protection)
+    if queue.is_running:
+        return
+    
     try:
         queue.start(updatable, stop_addon_slug=stop_addon_slug)
-    except RuntimeError as err:
-        _LOGGER.warning("Failed to start auto-update: %s", err)
+    except RuntimeError:
+        # Queue was started by another task, ignore silently
+        pass
 
 
 async def _remove_auto_update_listener(hass: HomeAssistant) -> None:
