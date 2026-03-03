@@ -801,6 +801,14 @@ class ESPHomeUpdatePanel extends LitElement {
           padding-left: 10px;
           padding-right: 10px;
         }
+        .name {
+          flex: 1;
+          font-weight: 500;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+          min-width: 0;
+        }
       }
     `;
   }
