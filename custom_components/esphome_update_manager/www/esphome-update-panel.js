@@ -784,6 +784,14 @@ class ESPHomeUpdatePanel extends LitElement {
         line-height: 1.5;
         color: var(--primary-text-color, #111);
       }
+      .name {
+        flex: 1;
+        font-weight: 500;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        min-width: 0;
+      }
 
       @media (max-width: 600px) and (pointer: coarse) {
         .content {
@@ -800,14 +808,6 @@ class ESPHomeUpdatePanel extends LitElement {
         .result-row {
           padding-left: 10px;
           padding-right: 10px;
-        }
-        .name {
-          flex: 1;
-          font-weight: 500;
-          overflow: hidden;
-          text-overflow: ellipsis;
-          white-space: nowrap;
-          min-width: 0;
         }
       }
     `;
