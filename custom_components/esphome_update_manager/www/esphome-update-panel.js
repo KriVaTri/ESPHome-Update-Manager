@@ -784,6 +784,24 @@ class ESPHomeUpdatePanel extends LitElement {
         line-height: 1.5;
         color: var(--primary-text-color, #111);
       }
+
+      @media (max-width: 600px) and (pointer: coarse) {
+        .content {
+          padding-left: 0px;
+          padding-right: 0px;
+        }
+        .device-row {
+          padding-left: 10px;
+          padding-right: 16px;
+        }
+        .toolbar {
+          margin-left: 0;
+        }
+        .result-row {
+          padding-left: 10px;
+          padding-right: 10px;
+        }
+      }
     `;
   }
 
