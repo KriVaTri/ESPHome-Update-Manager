@@ -797,11 +797,22 @@ def _get_esphome_update_entities(hass: HomeAssistant) -> list[dict[str, Any]]:
                 "online": online,
             })
 
+    # Handle devices without update entity in registry (edge case)
+    # Skip subdevices - they have no update entity at all
     for device in dev_reg.devices.values():
         if device.id not in esphome_device_ids:
             continue
 
         if device.id in devices_with_update_entity:
+            continue
+
+        # Check if this device has ANY update entity in registry (enabled or disabled)
+        # If not, it's a subdevice without its own firmware - skip it
+        has_update_entity = any(
+            e.device_id == device.id for e in esphome_update_entities
+        )
+
+        if not has_update_entity:
             continue
 
         installed = _parse_version(device.sw_version)
