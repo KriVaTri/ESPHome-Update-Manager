@@ -24,6 +24,9 @@ class ESPHomeUpdatePanel extends LitElement {
       _showLogPopup: { type: Boolean },
       _logContent: { type: String },
       _cancelling: { type: Boolean },
+      _tooltipName: { type: String },
+      _tooltipX: { type: Number },
+      _tooltipY: { type: Number },
     };
   }
 
@@ -48,6 +51,9 @@ class ESPHomeUpdatePanel extends LitElement {
     this._showLogPopup = false;
     this._logContent = null;
     this._cancelling = false;
+    this._tooltipName = null;
+    this._tooltipX = 0;
+    this._tooltipY = 0;
   }
 
   connectedCallback() {
@@ -60,7 +66,15 @@ class ESPHomeUpdatePanel extends LitElement {
       if (this.running) {
         this._restoreUpdatingState();
         this._startStatusPolling();
+      };
+    // Hide tooltip on scroll
+    this._scrollHandler = () => {
+      if (this._tooltipName) {
+        this._tooltipName = null;
+        this.requestUpdate();
       }
+    };
+    window.addEventListener('scroll', this._scrollHandler, true);
     });
     
     // Start polling immediately to catch backend-initiated updates
@@ -96,6 +110,9 @@ class ESPHomeUpdatePanel extends LitElement {
     if (this._backgroundCheckTimer) {
       clearInterval(this._backgroundCheckTimer);
       this._backgroundCheckTimer = null;
+    }
+    if (this._scrollHandler) {
+      window.removeEventListener('scroll', this._scrollHandler, true);
     }
   }
 
@@ -592,7 +609,18 @@ class ESPHomeUpdatePanel extends LitElement {
     );
   }
 
-  // ── Styles ──────────────────────────────────────────────────────
+  _showNameTooltip(e, name) {
+    const el = e.target;
+    // Alleen tonen als de naam afgeknipt is
+    if (el.scrollWidth > el.clientWidth) {
+      this._tooltipName = name;
+      this._tooltipX = e.clientX;
+      this._tooltipY = e.clientY;
+      this.requestUpdate();
+    }
+  }
+
+  // ─�� Styles ──────────────────────────────────────────────────────
 
   static get styles() {
     return css`
@@ -643,7 +671,6 @@ class ESPHomeUpdatePanel extends LitElement {
       }
 
       .online-status { flex: 0 0 20px; text-align: center; font-size: 0.75em; }
-      .name { flex: 1; font-weight: 500; }
       .version { color: #666; font-size: 0.85em; white-space: nowrap; }
       .version .arrow { color: #4caf50; font-weight: bold; }
 
@@ -784,6 +811,23 @@ class ESPHomeUpdatePanel extends LitElement {
         line-height: 1.5;
         color: var(--primary-text-color, #111);
       }
+
+      /* Name tooltip */
+      .name-tooltip {
+        position: fixed;
+        background: #333;
+        color: white;
+        padding: 8px 12px;
+        border-radius: 8px;
+        font-size: 0.9em;
+        z-index: 1000;
+        max-width: 80vw;
+        word-wrap: break-word;
+        box-shadow: 0 2px 10px rgba(0,0,0,0.3);
+        transform: translate(-50%, -100%) translateY(-10px);
+        pointer-events: none;
+      }
+
       .name {
         flex: 1;
         font-weight: 500;
@@ -809,6 +853,9 @@ class ESPHomeUpdatePanel extends LitElement {
           padding-left: 10px;
           padding-right: 10px;
         }
+        .name {
+          cursor: pointer;
+        }
       }
     `;
   }
@@ -826,6 +873,12 @@ class ESPHomeUpdatePanel extends LitElement {
     const showAddonOption = this._addonInfo?.installed;
 
     return html`
+      ${this._tooltipName ? html`
+        <div class="name-tooltip" style="top: ${this._tooltipY}px; left: ${this._tooltipX}px">
+          ${this._tooltipName}
+        </div>
+      ` : ""}
+
       ${this._showLogPopup ? this._renderLogPopup() : ""}
       
       <h1>
@@ -928,7 +981,11 @@ class ESPHomeUpdatePanel extends LitElement {
           `}
         </span>
         <span class="online-status">${this._onlineIcon(d.online)}</span>
-        <span class="name">${d.name}</span>
+        <span class="name" 
+          @click=${(e) => this._showNameTooltip(e, d.name)}
+          title="${d.name}">
+          ${d.name}
+        </span>
         <span class="version">
           ${d.current_version || "?"}${d.update_available && d.latest_version
             ? html` <span class="arrow">→</span> ${d.latest_version}`
