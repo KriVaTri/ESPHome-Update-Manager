@@ -33,12 +33,14 @@ MAX_UNAVAILABLE_DURATION = 120  # 2 minutes
 class DeviceUpdateResult:
     """Result of a single device update."""
 
-    def __init__(self, entity_id: str) -> None:
+    def __init__(self, entity_id: str, from_version: str | None = None, to_version: str | None = None) -> None:
         self.entity_id = entity_id
         self.status: str = STATUS_QUEUED
         self.started_at: datetime | None = None
         self.finished_at: datetime | None = None
         self.error: str | None = None
+        self.from_version: str | None = from_version
+        self.to_version: str | None = to_version
 
 
 class UpdateQueue:
@@ -67,6 +69,8 @@ class UpdateQueue:
                 "started_at": r.started_at.isoformat() if r.started_at else None,
                 "finished_at": r.finished_at.isoformat() if r.finished_at else None,
                 "error": r.error,
+                "from_version": r.from_version,
+                "to_version": r.to_version,
             }
             for r in self._queue
         ]
@@ -78,11 +82,21 @@ class UpdateQueue:
             counts[r.status] = counts.get(r.status, 0) + 1
         return counts
 
-    def start(self, entity_ids: list[str], stop_addon_slug: str | None = None) -> None:
+    def start(self, entity_ids: list[str], stop_addon_slug: str | None = None, version_info: dict | None = None) -> None:
         if self._running:
             raise RuntimeError("Update queue is already running")
 
-        self._queue = [DeviceUpdateResult(eid) for eid in entity_ids]
+        if version_info is None:
+            version_info = {}
+
+        self._queue = [
+            DeviceUpdateResult(
+                eid,
+                from_version=version_info.get(eid, {}).get("from"),
+                to_version=version_info.get(eid, {}).get("to"),
+            )
+            for eid in entity_ids
+        ]
         self._running = True
         self._cancelled = False
         self._current_index = 0
