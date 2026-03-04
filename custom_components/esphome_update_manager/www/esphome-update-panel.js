@@ -459,6 +459,15 @@ class ESPHomeUpdatePanel extends LitElement {
   }
 
   async _updateSingle(entityId) {
+    const device = this.devices.find(d => d.entity_id === entityId);
+    const versionInfo = {};
+    if (device) {
+      versionInfo[entityId] = {
+        from: device.current_version,
+        to: device.latest_version,
+      };
+    }
+
     const timeoutId = setTimeout(() => this._expireUpdating(entityId), UPDATING_TIMEOUT_MS);
     this._updatingIds = new Map(this._updatingIds);
     this._updatingIds.set(entityId, { startedAt: Date.now(), timeoutId });
@@ -469,6 +478,7 @@ class ESPHomeUpdatePanel extends LitElement {
         type: "esphome_update_manager/start",
         entity_ids: [entityId],
         stop_addon_slug: this._getStopAddonSlug(),
+        version_info: versionInfo,
       });
       this.running = true;
       this._startStatusPolling();
@@ -485,6 +495,18 @@ class ESPHomeUpdatePanel extends LitElement {
   async _startBatchUpdate() {
     if (this.selected.size === 0) return;
     const ids = [...this.selected];
+
+    const versionInfo = {};
+    ids.forEach(id => {
+      const device = this.devices.find(d => d.entity_id === id);
+      if (device) {
+        versionInfo[id] = {
+          from: device.current_version,
+          to: device.latest_version,
+        };
+      }
+    });
+
     this._updatingIds = new Map(this._updatingIds);
     ids.forEach((id) => {
       const timeoutId = setTimeout(() => this._expireUpdating(id), UPDATING_TIMEOUT_MS);
@@ -497,6 +519,7 @@ class ESPHomeUpdatePanel extends LitElement {
         type: "esphome_update_manager/start",
         entity_ids: ids,
         stop_addon_slug: this._getStopAddonSlug(),
+        version_info: versionInfo,
       });
       this.running = true;
       this._startStatusPolling();
