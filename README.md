@@ -1,4 +1,13 @@
-# <img width="50" height="50" alt="logo" src="https://github.com/user-attachments/assets/402670fd-f94c-4b9e-a895-66d8e41a5c6e" style="vertical-align: middle;" /> ESPHome Update Manager
+<table>
+  <tr>
+    <td valign="middle">
+      <img width="50" height="50" alt="logo" src="https://github.com/user-attachments/assets/402670fd-f94c-4b9e-a895-66d8e41a5c6e" />
+    </td>
+    <td valign="middle">
+      <h1 style="margin:0">ESPHome Update Manager</h1>
+    </td>
+  </tr>
+</table>
 
 [![Latest Release](https://img.shields.io/github/v/release/KriVaTri/esphome-update-manager?include_prereleases&label=release)](https://github.com/KriVaTri/ESPHome-Update-Manager/releases)
 
