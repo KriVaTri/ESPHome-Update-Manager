@@ -218,6 +218,8 @@ async def _write_update_log(hass: HomeAssistant, results: list[dict]) -> None:
             error = r.get("error")
             started_at = r.get("started_at", "")
             finished_at = r.get("finished_at", "")
+            from_version = r.get("from_version")
+            to_version = r.get("to_version")
             
             status_icon = {
                 "success": "✅",
@@ -230,6 +232,10 @@ async def _write_update_log(hass: HomeAssistant, results: list[dict]) -> None:
             
             lines.append(f"{status_icon} {entity_id}")
             lines.append(f"   Status: {status}")
+            if from_version and to_version:
+                lines.append(f"   Version: {from_version} → {to_version}")
+            elif from_version:
+                lines.append(f"   Version: {from_version}")
             if started_at:
                 lines.append(f"   Started: {started_at}")
             if finished_at:
@@ -422,17 +428,24 @@ async def _check_and_start_auto_update(hass: HomeAssistant) -> None:
     # Get all devices with available updates
     devices = _get_esphome_update_entities(hass)
     
-    updatable = [
-        d["entity_id"]
-        for d in devices
-        if d["entity_id"]
-        and d["update_available"]
-        and not d["firmware_disabled"]
-        and not d["firmware_unavailable"]
-        and not d["enabling"]
-        and d["online"] is not False
-        and not d["in_progress"]
-    ]
+    updatable = []
+    version_info = {}
+    
+    for d in devices:
+        if (
+            d["entity_id"]
+            and d["update_available"]
+            and not d["firmware_disabled"]
+            and not d["firmware_unavailable"]
+            and not d["enabling"]
+            and d["online"] is not False
+            and not d["in_progress"]
+        ):
+            updatable.append(d["entity_id"])
+            version_info[d["entity_id"]] = {
+                "from": d["current_version"],
+                "to": d["latest_version"],
+            }
     
     if not updatable:
         return
@@ -451,7 +464,7 @@ async def _check_and_start_auto_update(hass: HomeAssistant) -> None:
         return
     
     try:
-        queue.start(updatable, stop_addon_slug=stop_addon_slug)
+        queue.start(updatable, stop_addon_slug=stop_addon_slug, version_info=version_info)
     except RuntimeError:
         # Queue was started by another task, ignore silently
         pass
@@ -481,22 +494,39 @@ async def async_handle_start_updates(hass: HomeAssistant, call: ServiceCall) -> 
     entity_ids = call.data.get("entity_ids")
     
     if entity_ids:
-        # Use provided entity IDs
+        # Use provided entity IDs, but also get version info
+        devices = _get_esphome_update_entities(hass)
+        device_map = {d["entity_id"]: d for d in devices}
+        
         updatable = list(entity_ids)
+        version_info = {}
+        for eid in updatable:
+            if eid in device_map:
+                version_info[eid] = {
+                    "from": device_map[eid]["current_version"],
+                    "to": device_map[eid]["latest_version"],
+                }
     else:
         # Find all devices with available updates
         devices = _get_esphome_update_entities(hass)
-        updatable = [
-            d["entity_id"]
-            for d in devices
-            if d["entity_id"]
-            and d["update_available"]
-            and not d["firmware_disabled"]
-            and not d["firmware_unavailable"]
-            and not d["enabling"]
-            and d["online"] is not False
-            and not d["in_progress"]
-        ]
+        updatable = []
+        version_info = {}
+        
+        for d in devices:
+            if (
+                d["entity_id"]
+                and d["update_available"]
+                and not d["firmware_disabled"]
+                and not d["firmware_unavailable"]
+                and not d["enabling"]
+                and d["online"] is not False
+                and not d["in_progress"]
+            ):
+                updatable.append(d["entity_id"])
+                version_info[d["entity_id"]] = {
+                    "from": d["current_version"],
+                    "to": d["latest_version"],
+                }
     
     if not updatable:
         _LOGGER.info("No devices available for update")
@@ -516,7 +546,7 @@ async def async_handle_start_updates(hass: HomeAssistant, call: ServiceCall) -> 
             stop_addon_slug = VSCODE_ADDON_SLUG
     
     try:
-        queue.start(updatable, stop_addon_slug=stop_addon_slug)
+        queue.start(updatable, stop_addon_slug=stop_addon_slug, version_info=version_info)
     except RuntimeError as err:
         _LOGGER.warning("Failed to start updates via service: %s", err)
 
@@ -811,14 +841,16 @@ def ws_get_devices(hass, connection, msg):
         "type": "esphome_update_manager/start",
         "entity_ids": vol.All(vol.Coerce(list), [str]),
         vol.Optional("stop_addon_slug"): vol.Any(str, None),
+        vol.Optional("version_info"): vol.Any(dict, None),
     }
 )
 @callback
 def ws_start_updates(hass, connection, msg):
     queue: UpdateQueue = hass.data[DOMAIN]["queue"]
     stop_addon_slug = msg.get("stop_addon_slug")
+    version_info = msg.get("version_info", {})
     try:
-        queue.start(msg["entity_ids"], stop_addon_slug=stop_addon_slug)
+        queue.start(msg["entity_ids"], stop_addon_slug=stop_addon_slug, version_info=version_info)
         connection.send_result(msg["id"], {"started": True})
     except RuntimeError as err:
         connection.send_error(msg["id"], "already_running", str(err))
