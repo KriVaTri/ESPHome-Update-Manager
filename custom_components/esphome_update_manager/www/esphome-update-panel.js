@@ -39,6 +39,7 @@ class ESPHomeUpdatePanel extends LitElement {
     this._pendingEnables = new Map();
     this._updatingIds = new Map();
     this._localResults = [];
+    this._expiredEnables = new Set();
     this._enablingPollTimer = null;
     this._pollInterval = null;
     this._refreshDebounce = null;
@@ -54,6 +55,7 @@ class ESPHomeUpdatePanel extends LitElement {
     this._tooltipName = null;
     this._tooltipX = 0;
     this._tooltipY = 0;
+    this._loadPendingFromStorage();
   }
 
   connectedCallback() {
@@ -211,6 +213,58 @@ class ESPHomeUpdatePanel extends LitElement {
     this.requestUpdate();
   }
 
+  // ── Pending Storage ─────────────────────────────────────────────
+
+  _loadPendingFromStorage() {
+      try {
+        // Load pending enables
+        const stored = localStorage.getItem('esphome_pending_enables');
+        if (stored) {
+          const data = JSON.parse(stored);
+          const now = Date.now();
+          
+          for (const [entityId, info] of Object.entries(data)) {
+            const elapsed = now - info.startedAt;
+            const remaining = ENABLING_TIMEOUT_MS - elapsed;
+            
+            if (remaining > 0) {
+              // Still within timeout, restore it
+              const timeoutId = setTimeout(() => this._expireEnabling(entityId), remaining);
+              this._pendingEnables.set(entityId, { startedAt: info.startedAt, timeoutId });
+            } else {
+              // Timeout already expired, mark as expired
+              this._expiredEnables.add(entityId);
+            }
+          }
+        }
+        
+        // Load expired enables
+        const storedExpired = localStorage.getItem('esphome_expired_enables');
+        if (storedExpired) {
+          const expiredList = JSON.parse(storedExpired);
+          expiredList.forEach(entityId => this._expiredEnables.add(entityId));
+        }
+      } catch (e) {
+        console.error("Failed to load pending enables from storage", e);
+      }
+  }
+
+  _savePendingToStorage() {
+      try {
+        // Save pending enables
+        const data = {};
+        for (const [entityId, info] of this._pendingEnables) {
+          data[entityId] = { startedAt: info.startedAt };
+        }
+        localStorage.setItem('esphome_pending_enables', JSON.stringify(data));
+        
+        // Save expired enables
+        localStorage.setItem('esphome_expired_enables', JSON.stringify([...this._expiredEnables]));
+      } catch (e) {
+        console.error("Failed to save pending enables to storage", e);
+      }
+  }
+
   // ── Data ────────────────────────────────────────────────────────
 
   _restoreUpdatingState() {
@@ -234,12 +288,17 @@ class ESPHomeUpdatePanel extends LitElement {
   }
 
   _expireEnabling(entityId) {
-    const info = this._pendingEnables.get(entityId);
-    if (info?.timeoutId) clearTimeout(info.timeoutId);
-    this._pendingEnables.delete(entityId);
-    this._pendingEnables = new Map(this._pendingEnables);
-    this._addLocalResult(entityId, "failed", "Enable timed out — device may be unavailable");
-    this._loadDevices();
+      const info = this._pendingEnables.get(entityId);
+      if (info?.timeoutId) clearTimeout(info.timeoutId);
+      this._pendingEnables.delete(entityId);
+      this._pendingEnables = new Map(this._pendingEnables);
+      
+      // Remember this entity's enable has expired
+      this._expiredEnables.add(entityId);
+      
+      this._savePendingToStorage();
+      this._loadDevices();
+      this.requestUpdate();
   }
 
   _isUpdatingPending(entityId) {
@@ -265,20 +324,46 @@ class ESPHomeUpdatePanel extends LitElement {
   }
 
   _mergedDevices() {
-    return this.devices.map((d) => {
+    const toRemove = [];
+    
+    const result = this.devices.map((d) => {
       const isPending = this._isEnablingPending(d.entity_id);
-      if (isPending && !d.firmware_disabled && !d.enabling) {
-        const info = this._pendingEnables.get(d.entity_id);
-        if (info?.timeoutId) clearTimeout(info.timeoutId);
-        this._pendingEnables.delete(d.entity_id);
-        this._pendingEnables = new Map(this._pendingEnables);
-        return d;
-      }
-      if (isPending && d.firmware_disabled) {
+      const hasExpired = this._expiredEnables.has(d.entity_id);
+      
+      if (isPending) {
+        // Check if enabling completed successfully (enabled AND available)
+        if (!d.firmware_disabled && !d.enabling && !d.firmware_unavailable) {
+          // Success! Mark for removal after mapping
+          toRemove.push(d.entity_id);
+          return d;
+        }
+        
+        // Still waiting - show as enabling
         return { ...d, firmware_disabled: false, enabling: true };
       }
+      
+      // If enable expired, override backend's enabling flag
+      if (hasExpired && d.enabling) {
+        return { ...d, enabling: false, firmware_unavailable: true };
+      }
+      
+      // Trust the backend's enabling flag
       return d;
     });
+    
+    // Clean up completed enables after mapping
+    if (toRemove.length > 0) {
+      toRemove.forEach(entityId => {
+        const info = this._pendingEnables.get(entityId);
+        if (info?.timeoutId) clearTimeout(info.timeoutId);
+        this._pendingEnables.delete(entityId);
+        this._expiredEnables.delete(entityId);
+      });
+      this._pendingEnables = new Map(this._pendingEnables);
+      this._savePendingToStorage();
+    }
+    
+    return result;
   }
 
   async _loadDevices() {
@@ -433,22 +518,28 @@ class ESPHomeUpdatePanel extends LitElement {
   }
 
   async _enableEntity(entityId) {
-    const timeoutId = setTimeout(() => this._expireEnabling(entityId), ENABLING_TIMEOUT_MS);
-    this._pendingEnables = new Map(this._pendingEnables);
-    this._pendingEnables.set(entityId, { startedAt: Date.now(), timeoutId });
-    this.requestUpdate();
-    if (!this._enablingPollTimer) this._startEnablingPoll();
-
-    try {
-      await this.hass.callWS({ type: "esphome_update_manager/enable_entity", entity_id: entityId });
-    } catch (e) {
-      const info = this._pendingEnables.get(entityId);
-      if (info?.timeoutId) clearTimeout(info.timeoutId);
-      this._pendingEnables.delete(entityId);
+      // Clear expired state if user tries again
+      this._expiredEnables.delete(entityId);
+      this._savePendingToStorage();  // Save the cleared expired state
+      
+      const timeoutId = setTimeout(() => this._expireEnabling(entityId), ENABLING_TIMEOUT_MS);
       this._pendingEnables = new Map(this._pendingEnables);
-      this._addLocalResult(entityId, "failed", "Enable failed: " + e.message);
+      this._pendingEnables.set(entityId, { startedAt: Date.now(), timeoutId });
+      this._savePendingToStorage();
       this.requestUpdate();
-    }
+      if (!this._enablingPollTimer) this._startEnablingPoll();
+
+      try {
+        await this.hass.callWS({ type: "esphome_update_manager/enable_entity", entity_id: entityId });
+      } catch (e) {
+        const info = this._pendingEnables.get(entityId);
+        if (info?.timeoutId) clearTimeout(info.timeoutId);
+        this._pendingEnables.delete(entityId);
+        this._pendingEnables = new Map(this._pendingEnables);
+        this._savePendingToStorage();
+        this._addLocalResult(entityId, "failed", "Enable failed: " + e.message);
+        this.requestUpdate();
+      }
   }
 
   _getStopAddonSlug() {
@@ -634,7 +725,6 @@ class ESPHomeUpdatePanel extends LitElement {
 
   _showNameTooltip(e, name) {
     const el = e.target;
-    // Alleen tonen als de naam afgeknipt is
     if (el.scrollWidth > el.clientWidth) {
       this._tooltipName = name;
       this._tooltipX = e.clientX;
@@ -643,7 +733,7 @@ class ESPHomeUpdatePanel extends LitElement {
     }
   }
 
-  // ─�� Styles ──────────────────────────────────────────────────────
+  // ── Styles ──────────────────────────────────────────────────────
 
   static get styles() {
     return css`
@@ -718,7 +808,7 @@ class ESPHomeUpdatePanel extends LitElement {
       .btn-update { background: #2196f3; color: white; }
       .btn-update:hover:not(:disabled) { background: #1976d2; }
       .btn-updating { background: #2196f3; color: white; opacity: 0.9; }
-      .btn-unavailable { background: #90caf9; color: white; opacity: 0.7; }
+      .btn-unavailable { background: #58a9eb; color: white; opacity: 0.8; }
       .btn-offline { background: #666; color: white; opacity: 0.8; }
 
       .btn-select-all { background: #666; color: white; }
