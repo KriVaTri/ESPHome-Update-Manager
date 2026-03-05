@@ -898,9 +898,30 @@ def ws_get_status(hass, connection, msg):
 @callback
 def ws_enable_entity(hass, connection, msg):
     registry = er.async_get(hass)
+    entity_id = msg["entity_id"]
+    
+    # Check if entity exists in registry
+    entity = registry.async_get(entity_id)
+    if entity is None:
+        connection.send_error(
+            msg["id"], 
+            "entity_not_found", 
+            "Entity not found in registry. Try restarting Home Assistant."
+        )
+        return
+    
+    # Check if entity has a config entry
+    if entity.config_entry_id is None:
+        connection.send_error(
+            msg["id"], 
+            "no_config_entry", 
+            "Entity has no config entry. Try restarting Home Assistant."
+        )
+        return
+    
     try:
         registry.async_update_entity(
-            msg["entity_id"],
+            entity_id,
             disabled_by=None,
         )
         connection.send_result(msg["id"], {"enabled": True})
