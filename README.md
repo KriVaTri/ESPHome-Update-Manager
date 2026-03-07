@@ -19,7 +19,7 @@ A custom Home Assistant integration that provides a dedicated panel for managing
 - **Smart error handling** — Compile errors, OTA failures, and offline devices are detected and reported immediately
 - **Failure notifications** — Persistent notifications alert you when updates fail, with a link to the update log
 - **Update log** — Detailed log of all update results, viewable directly in the panel
-- **Log history** — Access up to 10 previous update logs via the 3-dots menu
+- **Log history** — Access up to 5 previous and 1 latest update logs via the 3-dots menu
 - **VS Code Server add-on management** — Optionally stop the VS Code Server add-on during updates to free memory, and automatically restart it when updates are complete
 - **Real-time status** — Live progress tracking with online/offline indicators for each device
 - **Resilient queue** — If a device fails, the queue continues with the next device
