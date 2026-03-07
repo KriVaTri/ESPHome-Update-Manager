@@ -176,7 +176,7 @@ Click **✕ Clear** to dismiss the results.
 Access update logs via the **⋮** menu in the top-right corner of the panel:
 
 - **Latest Log** — View the most recent update log
-- **Previous Logs** — Browse up to 10 historical update logs
+- **Previous Logs** — Browse up to 5 historical update logs
 
 Each log includes:
 - Timestamp of the update run
