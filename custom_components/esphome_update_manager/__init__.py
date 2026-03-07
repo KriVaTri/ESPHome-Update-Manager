@@ -23,7 +23,7 @@ from homeassistant.helpers.event import async_track_state_change_event
 from homeassistant.helpers.storage import Store
 from homeassistant.helpers.start import async_at_started
 
-from .const import DOMAIN
+from .const import DOMAIN, MAX_LOG_BACKUPS
 from .update_queue import UpdateQueue
 
 _LOGGER = logging.getLogger(__name__)
@@ -33,6 +33,7 @@ VSCODE_ADDON_SLUG = "a0d7b954_vscode"
 STORAGE_KEY = f"{DOMAIN}.settings"
 STORAGE_VERSION = 1
 LOG_FILENAME = "update_log.txt"
+LOG_BACKUP_DIR = "log-backups"
 
 CONFIG_SCHEMA = cv.empty_config_schema(DOMAIN)
 
@@ -40,6 +41,11 @@ CONFIG_SCHEMA = cv.empty_config_schema(DOMAIN)
 def _get_log_path(hass: HomeAssistant) -> Path:
     """Get the path to the update log file."""
     return Path(hass.config.path("www")) / "esphome-update-manager" / LOG_FILENAME
+
+
+def _get_log_backup_dir(hass: HomeAssistant) -> Path:
+    """Get the path to the log backup directory."""
+    return Path(hass.config.path("www")) / "esphome-update-manager" / LOG_BACKUP_DIR
 
 
 async def async_setup(hass: HomeAssistant, config: dict) -> bool:
@@ -71,6 +77,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     websocket_api.async_register_command(hass, ws_get_auto_update_settings)
     websocket_api.async_register_command(hass, ws_set_auto_update_settings)
     websocket_api.async_register_command(hass, ws_get_update_log)
+    websocket_api.async_register_command(hass, ws_list_log_backups)
+    websocket_api.async_register_command(hass, ws_get_log_backup)
 
     # Copy frontend files to www
     source = Path(__file__).parent / "www" / "esphome-update-panel.js"
@@ -118,6 +126,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             return
         
         await _write_update_log(hass, results)
+        await _backup_log(hass)
         
         # Check for failures
         failed_count = summary.get("failed", 0)
@@ -253,6 +262,67 @@ async def _write_update_log(hass: HomeAssistant, results: list[dict]) -> None:
     
     await hass.async_add_executor_job(_write_log)
     _LOGGER.info("Update log written to %s", log_path)
+
+
+async def _backup_log(hass: HomeAssistant) -> None:
+    """Create a backup of the current log file."""
+    log_path = _get_log_path(hass)
+    backup_dir = _get_log_backup_dir(hass)
+    
+    def _do_backup():
+        if not log_path.exists():
+            return
+        
+        # Create backup directory if needed
+        backup_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Generate backup filename with timestamp
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        backup_filename = f"update_log_{timestamp}.txt"
+        backup_path = backup_dir / backup_filename
+        
+        # Copy current log to backup
+        shutil.copy2(log_path, backup_path)
+        _LOGGER.info("Log backup created: %s", backup_path)
+        
+        # Clean up old backups (keep only MAX_LOG_BACKUPS)
+        backups = sorted(backup_dir.glob("update_log_*.txt"), reverse=True)
+        for old_backup in backups[MAX_LOG_BACKUPS:]:
+            old_backup.unlink()
+            _LOGGER.debug("Removed old log backup: %s", old_backup)
+    
+    await hass.async_add_executor_job(_do_backup)
+
+
+def _list_log_backups(hass: HomeAssistant) -> list[dict]:
+    """List all available log backups (excluding the most recent one)."""
+    backup_dir = _get_log_backup_dir(hass)
+    
+    if not backup_dir.exists():
+        return []
+    
+    backups = []
+    backup_files = sorted(backup_dir.glob("update_log_*.txt"), reverse=True)
+    
+    # Skip the first (most recent) backup - it's identical to the current log
+    for backup_file in backup_files[1:]:
+        # Extract timestamp from filename: update_log_2026-03-07_14-30-25.txt
+        filename = backup_file.name
+        match = re.match(r"update_log_(\d{4}-\d{2}-\d{2})_(\d{2}-\d{2}-\d{2})\.txt", filename)
+        if match:
+            date_str = match.group(1)
+            time_str = match.group(2).replace("-", ":")
+            display_name = f"{date_str} {time_str}"
+        else:
+            display_name = filename
+        
+        backups.append({
+            "filename": filename,
+            "display_name": display_name,
+            "path": str(backup_file),
+        })
+    
+    return backups
 
 
 async def _send_failure_notification(hass: HomeAssistant, results: list[dict], failed_count: int) -> None:
@@ -1029,4 +1099,49 @@ async def ws_get_update_log(hass, connection, msg):
         "exists": content is not None,
         "content": content,
         "url": f"/local/esphome-update-manager/{LOG_FILENAME}",
+    })
+
+
+@websocket_api.websocket_command({"type": "esphome_update_manager/list_log_backups"})
+@websocket_api.async_response
+async def ws_list_log_backups(hass, connection, msg):
+    """List all available log backups."""
+    backups = await hass.async_add_executor_job(_list_log_backups, hass)
+    connection.send_result(msg["id"], {"backups": backups})
+
+
+@websocket_api.websocket_command(
+    {
+        "type": "esphome_update_manager/get_log_backup",
+        "filename": str,
+    }
+)
+@websocket_api.async_response
+async def ws_get_log_backup(hass, connection, msg):
+    """Get the content of a specific log backup."""
+    backup_dir = _get_log_backup_dir(hass)
+    filename = msg["filename"]
+    
+    # Security: ensure filename doesn't contain path traversal
+    if "/" in filename or "\\" in filename or ".." in filename:
+        connection.send_error(msg["id"], "invalid_filename", "Invalid filename")
+        return
+    
+    backup_path = backup_dir / filename
+    
+    def _read_backup():
+        if backup_path.exists():
+            with open(backup_path, "r", encoding="utf-8") as f:
+                return f.read()
+        return None
+    
+    content = await hass.async_add_executor_job(_read_backup)
+    
+    if content is None:
+        connection.send_error(msg["id"], "not_found", "Backup file not found")
+        return
+    
+    connection.send_result(msg["id"], {
+        "filename": filename,
+        "content": content,
     })
