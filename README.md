@@ -199,7 +199,7 @@ When one or more updates fail, a persistent notification is created in Home Assi
 
 Clicking the link opens the panel and automatically displays the latest update log.
 
-<img width="500" height="400" alt="log" src="https://github.com/user-attachments/assets/6d978086-a895-42e7-a0d2-6824f66563af" />
+<img width="500" height="401" alt="log" src="https://github.com/user-attachments/assets/6d978086-a895-42e7-a0d2-6824f66563af" />
 
 ## Error handling
 
