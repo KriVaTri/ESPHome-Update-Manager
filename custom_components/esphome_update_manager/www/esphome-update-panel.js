@@ -23,10 +23,13 @@ class ESPHomeUpdatePanel extends LitElement {
       _autoUpdateEnabled: { type: Boolean },
       _showLogPopup: { type: Boolean },
       _logContent: { type: String },
+      _logTitle: { type: String },
       _cancelling: { type: Boolean },
       _tooltipName: { type: String },
       _tooltipX: { type: Number },
       _tooltipY: { type: Number },
+      _showMenu: { type: Boolean },
+      _logBackups: { type: Array },
     };
   }
 
@@ -51,10 +54,13 @@ class ESPHomeUpdatePanel extends LitElement {
     this._autoUpdateEnabled = false;
     this._showLogPopup = false;
     this._logContent = null;
+    this._logTitle = "Update Log";
     this._cancelling = false;
     this._tooltipName = null;
     this._tooltipX = 0;
     this._tooltipY = 0;
+    this._showMenu = false;
+    this._logBackups = [];
     this._loadPendingFromStorage();
   }
 
@@ -78,6 +84,20 @@ class ESPHomeUpdatePanel extends LitElement {
     };
     window.addEventListener('scroll', this._scrollHandler, true);
     });
+    
+    // Close menu when clicking outside
+    this._documentClickHandler = (e) => {
+      if (this._showMenu) {
+        const menu = this.shadowRoot?.querySelector('.header-menu');
+        const menuBtn = this.shadowRoot?.querySelector('.menu-btn');
+        if (menu && !menu.contains(e.composedPath()[0]) && 
+            menuBtn && !menuBtn.contains(e.composedPath()[0])) {
+          this._showMenu = false;
+          this.requestUpdate();
+        }
+      }
+    };
+    document.addEventListener('click', this._documentClickHandler);
     
     // Start polling immediately to catch backend-initiated updates
     this._startBackgroundStatusCheck();
@@ -115,6 +135,9 @@ class ESPHomeUpdatePanel extends LitElement {
     }
     if (this._scrollHandler) {
       window.removeEventListener('scroll', this._scrollHandler, true);
+    }
+    if (this._documentClickHandler) {
+      document.removeEventListener('click', this._documentClickHandler);
     }
   }
 
@@ -167,6 +190,27 @@ class ESPHomeUpdatePanel extends LitElement {
     }, 2000);
   }
 
+  // ── Menu ────────────────────────────────────────────────────────
+
+  async _toggleMenu() {
+    if (!this._showMenu) {
+      // Load backups when opening menu
+      await this._loadLogBackups();
+    }
+    this._showMenu = !this._showMenu;
+    this.requestUpdate();
+  }
+
+  async _loadLogBackups() {
+    try {
+      const res = await this.hass.callWS({ type: "esphome_update_manager/list_log_backups" });
+      this._logBackups = res.backups || [];
+    } catch (e) {
+      console.error("Failed to load log backups", e);
+      this._logBackups = [];
+    }
+  }
+
   // ── Log Popup ───────────────────────────────────────────────────
 
   async _openLogPopup() {
@@ -174,16 +218,38 @@ class ESPHomeUpdatePanel extends LitElement {
       const res = await this.hass.callWS({ type: "esphome_update_manager/get_update_log" });
       if (res.exists) {
         this._logContent = res.content;
+        this._logTitle = "📄 Latest Update Log";
         this._showLogPopup = true;
       } else {
         this._logContent = "No update log available yet.";
+        this._logTitle = "📄 Update Log";
         this._showLogPopup = true;
       }
     } catch (e) {
       console.error("Failed to load update log", e);
       this._logContent = "Failed to load update log.";
+      this._logTitle = "📄 Update Log";
       this._showLogPopup = true;
     }
+    this._showMenu = false;
+  }
+
+  async _openBackupLog(filename, displayName) {
+    try {
+      const res = await this.hass.callWS({ 
+        type: "esphome_update_manager/get_log_backup",
+        filename: filename,
+      });
+      this._logContent = res.content;
+      this._logTitle = `📋 Log: ${displayName}`;
+      this._showLogPopup = true;
+    } catch (e) {
+      console.error("Failed to load backup log", e);
+      this._logContent = "Failed to load backup log.";
+      this._logTitle = "📋 Backup Log";
+      this._showLogPopup = true;
+    }
+    this._showMenu = false;
   }
 
   _closeLogPopup() {
@@ -749,8 +815,85 @@ class ESPHomeUpdatePanel extends LitElement {
         display: flex;
         align-items: center;
       }
+      .header-spacer {
+        flex: 1;
+      }
       .content {
         padding: 0 16px 16px;
+      }
+
+      /* Header menu */
+      .header-menu-container {
+        position: relative;
+      }
+      .menu-btn {
+        background: none;
+        border: none;
+        font-size: 1em;
+        cursor: pointer;
+        width: 32px;
+        height: 32px;
+        padding: 20px;
+        border-radius: 50%;
+        color: var(--primary-text-color);
+        opacity: 0.6;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        line-height: 1;
+      }
+      .menu-btn:hover {
+        background: rgba(0, 0, 0, 0.2);
+      }
+      .header-menu {
+        position: absolute;
+        top: 100%;
+        right: 0;
+        background: var(--card-background-color, #fff);
+        border-radius: 0;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+        min-width: 200px;
+        z-index: 100;
+      }
+      .menu-item {
+        display: block;
+        width: 100%;
+        padding: 12px 16px;
+        border: none;
+        background: none;
+        text-align: left;
+        cursor: pointer;
+        font-size: 0.5em;
+        color: var(--primary-text-color);
+        border-bottom: 1px solid var(--divider-color, #e0e0e0);
+        border-radius: 0;
+      }
+      .menu-item:last-child {
+        border-bottom: none;
+      }
+      .menu-item:hover {
+        background: var(--secondary-background-color, #f5f5f5);
+      }
+      .menu-item.current-log {
+        font-size: 0.6em;
+      }
+      .menu-section-title {
+        padding: 8px 16px 4px;
+        font-size: 0.5em;
+        text-transform: uppercase;
+        color: var(--secondary-text-color, #666);
+        letter-spacing: 0.5px;
+      }
+      .menu-divider {
+        height: 1px;
+        background: var(--divider-color, #e0e0e0);
+        margin: 4px 0;
+      }
+      .no-backups {
+        padding: 12px 16px;
+        color: var(--secondary-text-color, #666);
+        font-style: italic;
+        font-size: 0.5em;
       }
 
       .toolbar {
@@ -999,6 +1142,11 @@ class ESPHomeUpdatePanel extends LitElement {
             style="height: 40px; vertical-align: middle; margin-right: 12px;">
         ESPHome Update Manager
         ${this._version ? html`<span class="version-badge">v${this._version}</span>` : ""}
+        <span class="header-spacer"></span>
+        <div class="header-menu-container">
+          <button class="menu-btn" @click=${this._toggleMenu} title="View logs">⋮</button>
+          ${this._showMenu ? this._renderMenu() : ""}
+        </div>
       </h1>
       <div class="content">
         <div class="summary">
@@ -1077,6 +1225,29 @@ class ESPHomeUpdatePanel extends LitElement {
     `;
   }
 
+  _renderMenu() {
+    return html`
+      <div class="header-menu">
+        <button class="menu-item current-log" @click=${this._openLogPopup}>
+          📄 Latest Log
+        </button>
+        ${this._logBackups.length > 0 ? html`
+          <div class="menu-divider"></div>
+          <div class="menu-section-title">Previous Logs</div>
+          ${this._logBackups.map(backup => html`
+            <button class="menu-item" 
+              @click=${() => this._openBackupLog(backup.filename, backup.display_name)}>
+              📋 ${backup.display_name}
+            </button>
+          `)}
+        ` : html`
+          <div class="menu-divider"></div>
+          <div class="no-backups">No previous logs available</div>
+        `}
+      </div>
+    `;
+  }
+
   _renderDevice(d) {
     const btn = this._getDeviceButton(d);
     const canSelect = this._canSelect(d);
@@ -1143,7 +1314,7 @@ class ESPHomeUpdatePanel extends LitElement {
       }}>
         <div class="log-popup">
           <div class="log-popup-header">
-            <h2>📄 Update Log</h2>
+            <h2>${this._logTitle}</h2>
             <button class="log-popup-close" @click=${this._closeLogPopup}>✕</button>
           </div>
           <div class="log-popup-content">
