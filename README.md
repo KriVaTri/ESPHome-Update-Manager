@@ -19,6 +19,7 @@ A custom Home Assistant integration that provides a dedicated panel for managing
 - **Smart error handling** — Compile errors, OTA failures, and offline devices are detected and reported immediately
 - **Failure notifications** — Persistent notifications alert you when updates fail, with a link to the update log
 - **Update log** — Detailed log of all update results, viewable directly in the panel
+- **Log history** — Access up to 10 previous update logs via the 3-dots menu
 - **VS Code Server add-on management** — Optionally stop the VS Code Server add-on during updates to free memory, and automatically restart it when updates are complete
 - **Real-time status** — Live progress tracking with online/offline indicators for each device
 - **Resilient queue** — If a device fails, the queue continues with the next device
@@ -172,13 +173,21 @@ Click **✕ Clear** to dismiss the results.
 
 ### Update log
 
-Click **📄 View Log** in the results section to view a detailed log of the last update run. The log includes:
+Access update logs via the **⋮** menu in the top-right corner of the panel:
 
+- **Latest Log** — View the most recent update log
+- **Previous Logs** — Browse up to 10 historical update logs
+
+Each log includes:
 - Timestamp of the update run
 - Summary with success/failed/skipped/cancelled counts
 - Details per device including status, start time, finish time, and any error messages
 
-The log is stored at `config/www/esphome-update-manager/update_log.txt` and is overwritten with each update run.
+Logs are stored at:
+- Current log: `config/www/esphome-update-manager/update_log.txt`
+- Backups: `config/www/esphome-update-manager/log-backups/`
+
+A new backup is created automatically after each update batch completes.
 
 ### Failure notifications
 
@@ -188,7 +197,7 @@ When one or more updates fail, a persistent notification is created in Home Assi
 > Update for X ESPHome device(s) has failed.  
 > *View update log* (clickable link)
 
-Clicking the link opens the panel and automatically displays the update log popup.
+Clicking the link opens the panel and automatically displays the latest update log.
 
 <img width="500" height="375" alt="log" src="https://github.com/user-attachments/assets/cb85685f-08d6-4714-98c4-38bdca3f6fe8" />
 
