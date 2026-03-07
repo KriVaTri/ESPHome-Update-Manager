@@ -13,3 +13,6 @@ STATUS_SUCCESS = "success"
 STATUS_FAILED = "failed"
 STATUS_SKIPPED = "skipped"
 STATUS_CANCELLED = "cancelled"
+
+# Max log updates to store
+MAX_LOG_BACKUPS = 5
