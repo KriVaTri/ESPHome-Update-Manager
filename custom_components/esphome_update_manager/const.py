@@ -15,4 +15,4 @@ STATUS_SKIPPED = "skipped"
 STATUS_CANCELLED = "cancelled"
 
 # Max log updates to store
-MAX_LOG_BACKUPS = 5
+MAX_LOG_BACKUPS = 6
