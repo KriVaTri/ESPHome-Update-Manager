@@ -69,7 +69,7 @@ The integration can be configured via **Settings → Devices & Services → ESPH
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| Maximum number of log backups to keep | 10 | Number of previous update logs to retain (0 = disable backups) |
+| Maximum number of log backups to keep | 5 | Number of previous update logs to retain (0 = disable backups) |
 
 ## Usage
 
@@ -184,7 +184,7 @@ Click **✕ Clear** to dismiss the results.
 Access update logs via the **⋮** menu in the top-right corner of the panel:
 
 - **Latest Log** — View the most recent update log
-- **Previous Logs** — Browse previous update logs (configurable, default: 10)
+- **Previous Logs** — Browse previous update logs (configurable, default: 5)
 
 Each log includes:
 - Timestamp of the update run
