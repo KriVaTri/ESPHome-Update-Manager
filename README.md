@@ -19,7 +19,7 @@ A custom Home Assistant integration that provides a dedicated panel for managing
 - **Smart error handling** — Compile errors, OTA failures, and offline devices are detected and reported immediately
 - **Failure notifications** — Persistent notifications alert you when updates fail, with a link to the update log
 - **Update log** — Detailed log of all update results, viewable directly in the panel
-- **Log history** — Access up to 5 previous and 1 latest update logs via the 3-dots menu
+- **Log history** — Access previous update logs via the 3-dots menu (configurable backup count)
 - **VS Code Server add-on management** — Optionally stop the VS Code Server add-on during updates to free memory, and automatically restart it when updates are complete
 - **Real-time status** — Live progress tracking with online/offline indicators for each device
 - **Resilient queue** — If a device fails, the queue continues with the next device
@@ -62,6 +62,14 @@ A custom Home Assistant integration that provides a dedicated panel for managing
 2. Search for **ESPHome Update Manager**
 3. Click to add — no configuration needed
 4. A new **ESPHome Updates** panel appears in the sidebar
+
+## Configuration
+
+The integration can be configured via **Settings → Devices & Services → ESPHome Update Manager → Configure**:
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| Maximum number of log backups to keep | 10 | Number of previous update logs to retain (0 = disable backups) |
 
 ## Usage
 
@@ -176,7 +184,7 @@ Click **✕ Clear** to dismiss the results.
 Access update logs via the **⋮** menu in the top-right corner of the panel:
 
 - **Latest Log** — View the most recent update log
-- **Previous Logs** — Browse up to 5 historical update logs
+- **Previous Logs** — Browse previous update logs (configurable, default: 10)
 
 Each log includes:
 - Timestamp of the update run
@@ -187,7 +195,7 @@ Logs are stored at:
 - Current log: `config/www/esphome-update-manager/update_log.txt`
 - Backups: `config/www/esphome-update-manager/log-backups/`
 
-A new backup is created automatically after each update batch completes.
+A new backup is created automatically after each update batch completes. The number of backups kept can be configured in the integration settings (set to 0 to disable backups).
 
 ### Failure notifications
 
