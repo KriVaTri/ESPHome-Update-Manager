@@ -14,5 +14,5 @@ STATUS_FAILED = "failed"
 STATUS_SKIPPED = "skipped"
 STATUS_CANCELLED = "cancelled"
 
-# Max log updates to store
-MAX_LOG_BACKUPS = 6
+# Default max log updates to store
+DEFAULT_MAX_LOG_BACKUPS = 5
