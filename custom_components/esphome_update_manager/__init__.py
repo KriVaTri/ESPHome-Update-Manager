@@ -23,7 +23,7 @@ from homeassistant.helpers.event import async_track_state_change_event
 from homeassistant.helpers.storage import Store
 from homeassistant.helpers.start import async_at_started
 
-from .const import DOMAIN, MAX_LOG_BACKUPS
+from .const import DOMAIN, DEFAULT_MAX_LOG_BACKUPS
 from .update_queue import UpdateQueue
 
 _LOGGER = logging.getLogger(__name__)
@@ -269,7 +269,16 @@ async def _backup_log(hass: HomeAssistant) -> None:
     log_path = _get_log_path(hass)
     backup_dir = _get_log_backup_dir(hass)
     
-    def _do_backup():
+    # Get max backups from config entry options
+    entries = hass.config_entries.async_entries(DOMAIN)
+    entry = entries[0] if entries else None
+    max_backups = int(entry.options.get("max_log_backups", DEFAULT_MAX_LOG_BACKUPS)) if entry else DEFAULT_MAX_LOG_BACKUPS
+    
+    # If max_backups is 0, don't create backups
+    if max_backups == 0:
+        return
+    
+    def _do_backup(max_backups_count):
         if not log_path.exists():
             return
         
@@ -285,13 +294,13 @@ async def _backup_log(hass: HomeAssistant) -> None:
         shutil.copy2(log_path, backup_path)
         _LOGGER.info("Log backup created: %s", backup_path)
         
-        # Clean up old backups (keep only MAX_LOG_BACKUPS)
+        # Clean up old backups (keep only max_backups_count)
         backups = sorted(backup_dir.glob("update_log_*.txt"), reverse=True)
-        for old_backup in backups[MAX_LOG_BACKUPS:]:
+        for old_backup in backups[max_backups_count + 1:]:
             old_backup.unlink()
             _LOGGER.debug("Removed old log backup: %s", old_backup)
     
-    await hass.async_add_executor_job(_do_backup)
+    await hass.async_add_executor_job(_do_backup, max_backups)
 
 
 def _list_log_backups(hass: HomeAssistant) -> list[dict]:
