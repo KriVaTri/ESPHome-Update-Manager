@@ -9,5 +9,18 @@
     "abort": {
       "already_configured": "Already configured."
     }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "ESPHome Update Manager Settings",
+        "data": {
+          "max_log_backups": "Maximum number of log backups to keep"
+        },
+        "data_description": {
+          "max_log_backups": "Set to 0 to disable log backups"
+        }
+      }
+    }
   }
 }
