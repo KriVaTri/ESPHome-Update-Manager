@@ -16,6 +16,7 @@ A custom Home Assistant integration that provides a dedicated panel for managing
 - **Individual updates** — Update a single device directly from the panel
 - **Auto-update** — Automatically start updates when new firmware becomes available
 - **Enable firmware entities** — Disabled firmware update entities can be enabled directly from the panel
+- **Skipped update detection** — Devices with updates skipped via Home Assistant are clearly marked
 - **Smart error handling** — Compile errors, OTA failures, and offline devices are detected and reported immediately
 - **Failure notifications** — Persistent notifications alert you when updates fail, with a link to the update log
 - **Update log** — Detailed log of all update results, viewable directly in the panel
@@ -91,6 +92,7 @@ The panel shows all ESPHome devices with:
 |--------|---------|
 | **Update** (blue) | Update ready to install — click to start |
 | **Up to date** (green) | Device is on the latest firmware |
+| **Skipped** (purple) | Update was skipped via Home Assistant — clear skip in HA to update |
 | **Enable** (orange) | Firmware entity is disabled — click to enable |
 | **Enabling…** (orange + spinner) | Entity is being enabled, waiting for HA to pick it up |
 | **Updating…** (blue + spinner) | Update is in progress |
@@ -273,6 +275,10 @@ The integration handles various failure scenarios gracefully:
 ### Notification link does not open the log
 - Clear your browser cache and reload the panel
 - Ensure the panel is accessible at `/esphome-update-manager`
+
+### Device shows "Skipped" but I want to update it
+- The update was skipped via Home Assistant's Settings → System → Updates
+- Clear the skipped update there, then the device will show "Update" in this panel
 
 ## License
 
