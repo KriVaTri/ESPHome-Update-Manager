@@ -278,7 +278,7 @@ The integration handles various failure scenarios gracefully:
 
 ### Device shows "Skipped" but I want to update it
 - The update was skipped via Home Assistant's Settings → System → Updates
-- Clear the skipped update there, then the device will show "Update" in this panel
+- Clear the skipped update there (via the ⋮ menu), then the device will show "Update" in this panel
 
 ## License
 
