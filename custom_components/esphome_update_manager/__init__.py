@@ -826,6 +826,7 @@ def _get_esphome_update_entities(hass: HomeAssistant) -> list[dict[str, Any]]:
                 "firmware_unavailable": False,
                 "enabling": False,
                 "online": online,
+                "skipped": False,
             })
 
         elif state is None or state.state == "unavailable":
@@ -847,6 +848,7 @@ def _get_esphome_update_entities(hass: HomeAssistant) -> list[dict[str, Any]]:
                 "firmware_unavailable": is_fw_unavailable,
                 "enabling": is_enabling,
                 "online": online,
+                "skipped": False,
             })
 
         else:
@@ -862,18 +864,22 @@ def _get_esphome_update_entities(hass: HomeAssistant) -> list[dict[str, Any]]:
 
             ha_says_update = state.state == "on"
             actually_newer = _is_update_available(installed, latest)
+            
+            # Check if update was skipped (HA says no update, but newer version exists)
+            is_skipped = not ha_says_update and actually_newer
 
             devices.append({
                 "entity_id": entity_id,
                 "name": name,
                 "current_version": installed,
-                "latest_version": latest if (ha_says_update and actually_newer) else None,
+                "latest_version": latest if (ha_says_update and actually_newer) or is_skipped else None,
                 "update_available": ha_says_update and actually_newer,
                 "in_progress": state.attributes.get("in_progress", False),
                 "firmware_disabled": False,
                 "firmware_unavailable": False,
                 "enabling": False,
                 "online": online,
+                "skipped": is_skipped,
             })
 
     # Handle devices without update entity in registry (edge case)
@@ -911,6 +917,7 @@ def _get_esphome_update_entities(hass: HomeAssistant) -> list[dict[str, Any]]:
             "firmware_unavailable": False,
             "enabling": False,
             "online": online,
+            "skipped": False,
         })
 
     devices.sort(key=lambda d: (d["name"] or "").lower())
