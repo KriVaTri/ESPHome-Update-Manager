@@ -767,6 +767,9 @@ class ESPHomeUpdatePanel extends LitElement {
     if (d.update_available) {
       return { label: "Update", cls: "btn-update", disabled: false, action: "update", spinner: false };
     }
+    if (d.skipped) {
+      return { label: "Skipped", cls: "btn-skipped", disabled: true, action: null, spinner: false };
+    }
     return { label: "Up to date", cls: "btn-uptodate", disabled: true, action: null, spinner: false };
   }
 
@@ -953,6 +956,7 @@ class ESPHomeUpdatePanel extends LitElement {
       .btn-updating { background: #2196f3; color: white; opacity: 0.9; }
       .btn-unavailable { background: #58a9eb; color: white; opacity: 0.8; }
       .btn-offline { background: #666; color: white; opacity: 0.8; }
+      .btn-skipped { background: #9c27b0; color: white; opacity: 0.8; }
 
       .btn-select-all { background: #666; color: white; }
       .btn-select-all:hover { background: #555; }
@@ -1271,7 +1275,7 @@ class ESPHomeUpdatePanel extends LitElement {
           ${d.name}
         </span>
         <span class="version">
-          ${d.current_version || "?"}${d.update_available && d.latest_version
+          ${d.current_version || "?"}${(d.update_available || d.skipped) && d.latest_version
             ? html` <span class="arrow">→</span> ${d.latest_version}`
             : ""}
         </span>
