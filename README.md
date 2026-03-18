@@ -42,26 +42,11 @@ A custom Home Assistant integration that provides a dedicated panel for managing
       name: "Status"
   ```
    
-## Installation
+## Installation 
 
-### HACS (recommended)
-
-1. Open HACS in Home Assistant
-2. Click the three dots menu (top right) → **Custom repositories**
-3. Add the repository URL and select **Integration** as category
-4. Search for **ESPHome Update Manager** and install it
-5. Restart Home Assistant
-
-### Manual installation
-
-1. Copy the `custom_components/esphome_update_manager` folder to your Home Assistant `config/custom_components/` directory
-2. Restart Home Assistant
-
-## Setup
-
-1. Go to **Settings → Devices & Services → Add Integration**
-2. Search for **ESPHome Update Manager**
-3. Click to add — no configuration needed
+1. Via HACS: Search for **ESPHome Update Manager**, download and restart Home Assistant
+2. Or manual: Copy the `custom_components/esphome_update_manager` folder to your Home Assistant `config/custom_components/` directory and restart
+3. Add integration: Home Assistant → Settings → Devices & Services → Add Integration → search **ESPHome Update Manager**
 4. A new **ESPHome Updates** panel appears in the sidebar
 
 ## Configuration
