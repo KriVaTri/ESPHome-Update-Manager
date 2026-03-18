@@ -45,6 +45,7 @@ A custom Home Assistant integration that provides a dedicated panel for managing
 ## Installation 
 
 1. Via HACS: Search for **ESPHome Update Manager**, download and restart Home Assistant
+
    Or manual: Copy the `custom_components/esphome_update_manager` folder to your Home Assistant `config/custom_components/` directory and restart
 2. Add integration: Home Assistant → Settings → Devices & Services → Add Integration → search **ESPHome Update Manager**
 3. A new **ESPHome Updates** panel appears in the sidebar
