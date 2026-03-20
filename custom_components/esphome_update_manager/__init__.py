@@ -708,6 +708,13 @@ def _is_update_available(installed: str | None, latest: str | None) -> bool:
     return lat > inst
 
 
+def _is_esphome_version(version: str | None) -> bool:
+    """Check if version string looks like an ESPHome version (YYYY.M.x format)."""
+    if not version:
+        return True  # Allow None/empty - could be offline ESPHome device
+    return str(version).startswith("20")
+
+
 def _get_esphome_builder_version(hass: HomeAssistant) -> str | None:
     state = hass.states.get(BUILDER_ENTITY_ID)
     if state:
@@ -813,6 +820,11 @@ def _get_esphome_update_entities(hass: HomeAssistant) -> list[dict[str, Any]]:
 
         if is_disabled:
             installed = registry_version
+            
+            # Skip non-ESPHome firmware (e.g., manufacturer firmware like 1.4.2)
+            if not _is_esphome_version(installed):
+                continue
+            
             update_available = _is_update_available(installed, builder_version)
 
             devices.append({
@@ -833,6 +845,11 @@ def _get_esphome_update_entities(hass: HomeAssistant) -> list[dict[str, Any]]:
             is_enabling = state is None and online is not False
 
             installed = registry_version
+            
+            # Skip non-ESPHome firmware (e.g., manufacturer firmware like 1.4.2)
+            if not _is_esphome_version(installed):
+                continue
+            
             update_available = _is_update_available(installed, builder_version)
 
             is_fw_unavailable = state is not None and state.state == "unavailable" and not is_enabling
@@ -846,7 +863,7 @@ def _get_esphome_update_entities(hass: HomeAssistant) -> list[dict[str, Any]]:
                 "in_progress": False,
                 "firmware_disabled": False,
                 "firmware_unavailable": is_fw_unavailable,
-                "enabling": is_enabling,
+                "enabling": False,
                 "online": online,
                 "skipped": False,
             })
@@ -856,6 +873,10 @@ def _get_esphome_update_entities(hass: HomeAssistant) -> list[dict[str, Any]]:
                 state.attributes.get("installed_version")
             )
             installed = state_version or registry_version
+
+            # Skip non-ESPHome firmware (e.g., manufacturer firmware like 1.4.2)
+            if not _is_esphome_version(installed):
+                continue
 
             state_latest = _parse_version(
                 state.attributes.get("latest_version")
@@ -901,6 +922,11 @@ def _get_esphome_update_entities(hass: HomeAssistant) -> list[dict[str, Any]]:
             continue
 
         installed = _parse_version(device.sw_version)
+        
+        # Skip non-ESPHome firmware (e.g., manufacturer firmware like 1.4.2)
+        if not _is_esphome_version(installed):
+            continue
+        
         update_available = _is_update_available(installed, builder_version)
 
         online = _is_device_online(hass, ent_reg, device.id)
