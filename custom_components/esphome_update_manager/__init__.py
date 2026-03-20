@@ -713,6 +713,7 @@ def _is_esphome_version(version: str | None) -> bool:
     if not version:
         return True  # Allow None/empty - could be offline ESPHome device
     return str(version).startswith("20")
+#   return bool(re.match(r"^20[2-9]\d\.\d{1,2}\.\d+$", str(version))) # if "20" is not sufficient then use this line instead
 
 
 def _get_esphome_builder_version(hass: HomeAssistant) -> str | None:
