@@ -417,7 +417,7 @@ def _is_esphome_update_entity(hass: HomeAssistant, entity_id: str) -> bool:
 
 
 async def _setup_auto_update_listener(hass: HomeAssistant) -> None:
-    """Setup listener for ALL update entity state changes, filter for ESPHome in callback."""
+    """Setup listener for update entity state changes and device status changes."""
     
     # Remove existing listeners first
     for unsub in hass.data[DOMAIN].get("unsubscribe_listeners", []):
@@ -438,7 +438,7 @@ async def _setup_auto_update_listener(hass: HomeAssistant) -> None:
         if new_state.state != "on":
             return
         
-        # Skip if it was already "on"
+        # Skip if it was already "on" (e.g. deep sleep device waking up)
         if old_state is not None and old_state.state == "on":
             return
         
@@ -461,34 +461,93 @@ async def _setup_auto_update_listener(hass: HomeAssistant) -> None:
         
         hass.async_create_task(_delayed_auto_update())
 
-    # Get all current update entity IDs
+    @callback
+    def _handle_status_state_change(event: Event) -> None:
+        """Handle state change of device status sensors (for deep sleep devices)."""
+        entity_id = event.data.get("entity_id")
+        new_state = event.data.get("new_state")
+        old_state = event.data.get("old_state")
+        
+        if new_state is None:
+            return
+        
+        # Only trigger when device comes online (status becomes "on")
+        if new_state.state != "on":
+            return
+        
+        # Skip if it was already "on"
+        if old_state is not None and old_state.state == "on":
+            return
+        
+        old_state_str = old_state.state if old_state else "None"
+        _LOGGER.info(
+            "ESPHome device came online: %s (state: %s -> %s), checking for updates in 5 seconds",
+            entity_id,
+            old_state_str,
+            new_state.state
+        )
+        
+        # Delay to allow update entity to refresh
+        async def _delayed_auto_update():
+            await asyncio.sleep(5)
+            await _check_and_start_auto_update(hass)
+        
+        hass.async_create_task(_delayed_auto_update())
+
     ent_reg = er.async_get(hass)
+    
+    # Get all update entity IDs
     all_update_entity_ids = [
         entity.entity_id
         for entity in ent_reg.entities.values()
         if entity.domain == "update" and entity.disabled_by is None
     ]
 
-    if not all_update_entity_ids:
-        _LOGGER.warning("No update entities found for auto-update listener")
+    # Get all ESPHome status sensor entity IDs (for deep sleep detection)
+    esphome_device_ids = _get_esphome_device_ids(hass)
+    all_status_entity_ids = [
+        entity.entity_id
+        for entity in ent_reg.entities.values()
+        if (
+            entity.domain == "binary_sensor"
+            and entity.platform == "esphome"
+            and entity.entity_id.endswith("_status")
+            and entity.disabled_by is None
+            and entity.device_id in esphome_device_ids
+        )
+    ]
+
+    if not all_update_entity_ids and not all_status_entity_ids:
+        _LOGGER.warning("No update or status entities found for auto-update listener")
         return
 
-    # Subscribe to state changes for ALL update entities
-    unsub = async_track_state_change_event(
-        hass,
-        all_update_entity_ids,
-        _handle_update_state_change,
-    )
-    hass.data[DOMAIN]["unsubscribe_listeners"].append(unsub)
+    # Subscribe to state changes for update entities
+    if all_update_entity_ids:
+        unsub_updates = async_track_state_change_event(
+            hass,
+            all_update_entity_ids,
+            _handle_update_state_change,
+        )
+        hass.data[DOMAIN]["unsubscribe_listeners"].append(unsub_updates)
+
+    # Subscribe to state changes for status sensors (deep sleep devices)
+    if all_status_entity_ids:
+        unsub_status = async_track_state_change_event(
+            hass,
+            all_status_entity_ids,
+            _handle_status_state_change,
+        )
+        hass.data[DOMAIN]["unsubscribe_listeners"].append(unsub_status)
     
-    # Log which ESPHome entities we're actually monitoring
-    esphome_entities = [eid for eid in all_update_entity_ids if _is_esphome_update_entity(hass, eid)]
+    # Log which entities we're monitoring
+    esphome_update_entities = [eid for eid in all_update_entity_ids if _is_esphome_update_entity(hass, eid)]
     _LOGGER.info(
-        "Auto-update listener active. Monitoring %d update entities, %d are ESPHome devices: %s",
+        "Auto-update listener active. Monitoring %d update entities (%d ESPHome) and %d status sensors",
         len(all_update_entity_ids),
-        len(esphome_entities),
-        esphome_entities
+        len(esphome_update_entities),
+        len(all_status_entity_ids),
     )
+    _LOGGER.debug("Status sensors monitored: %s", all_status_entity_ids)
 
 
 async def _check_and_start_auto_update(hass: HomeAssistant) -> None:
@@ -970,6 +1029,7 @@ def ws_get_devices(hass, connection, msg):
 )
 @callback
 def ws_start_updates(hass, connection, msg):
+    _LOGGER.debug("WebSocket: start updates requested for %s", msg["entity_ids"])
     queue: UpdateQueue = hass.data[DOMAIN]["queue"]
     stop_addon_slug = msg.get("stop_addon_slug")
     version_info = msg.get("version_info", {})
@@ -977,12 +1037,14 @@ def ws_start_updates(hass, connection, msg):
         queue.start(msg["entity_ids"], stop_addon_slug=stop_addon_slug, version_info=version_info)
         connection.send_result(msg["id"], {"started": True})
     except RuntimeError as err:
+        _LOGGER.warning("WebSocket: start updates failed - %s", err)
         connection.send_error(msg["id"], "already_running", str(err))
 
 
 @websocket_api.websocket_command({"type": "esphome_update_manager/cancel"})
 @callback
 def ws_cancel_updates(hass, connection, msg):
+    _LOGGER.warning("WebSocket: cancel updates requested")
     queue: UpdateQueue = hass.data[DOMAIN]["queue"]
     queue.cancel()
     connection.send_result(msg["id"], {"cancelled": True})
