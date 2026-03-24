@@ -62,15 +62,18 @@ class ESPHomeUpdatePanel extends LitElement {
     this._showMenu = false;
     this._logBackups = [];
     this._loadPendingFromStorage();
+    console.log("[EUM Debug] Panel constructor called");
   }
 
   connectedCallback() {
     super.connectedCallback();
+    console.log("[EUM Debug] connectedCallback - panel mounted");
     this._loadDevices();
     this._loadAddonInfo();
     this._loadAutoUpdateSettings();
     this._addonPollTimer = setInterval(() => this._loadAddonInfo(), 30000);
     this._pollStatus().then(() => {
+      console.log("[EUM Debug] Initial pollStatus complete, running:", this.running);
       if (this.running) {
         this._restoreUpdatingState();
         this._startStatusPolling();
@@ -108,12 +111,15 @@ class ESPHomeUpdatePanel extends LitElement {
 
   disconnectedCallback() {
     super.disconnectedCallback();
+    console.log("[EUM Debug] disconnectedCallback - panel unmounting");
     this._stopEnablingPoll();
-    for (const [, info] of this._pendingEnables) {
+    for (const [entityId, info] of this._pendingEnables) {
+      console.log("[EUM Debug] Clearing pending enable timer for:", entityId);
       if (info.timeoutId) clearTimeout(info.timeoutId);
     }
     this._pendingEnables.clear();
-    for (const [, info] of this._updatingIds) {
+    for (const [entityId, info] of this._updatingIds) {
+      console.log("[EUM Debug] Clearing updating timer for:", entityId);
       if (info.timeoutId) clearTimeout(info.timeoutId);
     }
     this._updatingIds.clear();
@@ -266,6 +272,7 @@ class ESPHomeUpdatePanel extends LitElement {
   _addLocalResult(entityId, status, error) {
     const device = this.devices.find((d) => d.entity_id === entityId);
     const name = device?.name || entityId;
+    console.log("[EUM Debug] Adding local result:", { entityId: name, status, error });
     this._localResults = [
       ...this._localResults,
       {
@@ -288,6 +295,7 @@ class ESPHomeUpdatePanel extends LitElement {
         if (stored) {
           const data = JSON.parse(stored);
           const now = Date.now();
+          console.log("[EUM Debug] Loading pending enables from storage:", data);
           
           for (const [entityId, info] of Object.entries(data)) {
             const elapsed = now - info.startedAt;
@@ -295,10 +303,12 @@ class ESPHomeUpdatePanel extends LitElement {
             
             if (remaining > 0) {
               // Still within timeout, restore it
+              console.log("[EUM Debug] Restoring enable timer for", entityId, "remaining:", remaining, "ms");
               const timeoutId = setTimeout(() => this._expireEnabling(entityId), remaining);
               this._pendingEnables.set(entityId, { startedAt: info.startedAt, timeoutId });
             } else {
               // Timeout already expired, mark as expired
+              console.log("[EUM Debug] Enable timer already expired for", entityId);
               this._expiredEnables.add(entityId);
             }
           }
@@ -308,10 +318,11 @@ class ESPHomeUpdatePanel extends LitElement {
         const storedExpired = localStorage.getItem('esphome_expired_enables');
         if (storedExpired) {
           const expiredList = JSON.parse(storedExpired);
+          console.log("[EUM Debug] Loading expired enables from storage:", expiredList);
           expiredList.forEach(entityId => this._expiredEnables.add(entityId));
         }
       } catch (e) {
-        console.error("Failed to load pending enables from storage", e);
+        console.error("[EUM Debug] Failed to load pending enables from storage", e);
       }
   }
 
@@ -322,12 +333,13 @@ class ESPHomeUpdatePanel extends LitElement {
         for (const [entityId, info] of this._pendingEnables) {
           data[entityId] = { startedAt: info.startedAt };
         }
+        console.log("[EUM Debug] Saving pending enables to storage:", data);
         localStorage.setItem('esphome_pending_enables', JSON.stringify(data));
         
         // Save expired enables
         localStorage.setItem('esphome_expired_enables', JSON.stringify([...this._expiredEnables]));
       } catch (e) {
-        console.error("Failed to save pending enables to storage", e);
+        console.error("[EUM Debug] Failed to save pending enables to storage", e);
       }
   }
 
@@ -335,17 +347,21 @@ class ESPHomeUpdatePanel extends LitElement {
 
   _restoreUpdatingState() {
     if (!this.results || this.results.length === 0) return;
+    console.log("[EUM Debug] Restoring updating state from results:", this.results);
     this._updatingIds = new Map(this._updatingIds);
     for (const r of this.results) {
       if (r.status === "running" || r.status === "queued") {
         if (!this._updatingIds.has(r.entity_id)) {
+          console.log("[EUM Debug] Setting up timeout for", r.entity_id, "timeout:", UPDATING_TIMEOUT_MS, "ms");
           const timeoutId = setTimeout(() => {
+            console.log("[EUM Debug] Timeout expired for", r.entity_id, "- calling _expireUpdating");
             this._expireUpdating(r.entity_id);
           }, UPDATING_TIMEOUT_MS);
           this._updatingIds.set(r.entity_id, { startedAt: Date.now(), timeoutId });
         }
       }
     }
+    console.log("[EUM Debug] _updatingIds after restore:", [...this._updatingIds.keys()]);
     this.requestUpdate();
   }
 
@@ -354,6 +370,7 @@ class ESPHomeUpdatePanel extends LitElement {
   }
 
   _expireEnabling(entityId) {
+      console.log("[EUM Debug] _expireEnabling called for:", entityId);
       const info = this._pendingEnables.get(entityId);
       if (info?.timeoutId) clearTimeout(info.timeoutId);
       this._pendingEnables.delete(entityId);
@@ -372,17 +389,30 @@ class ESPHomeUpdatePanel extends LitElement {
   }
 
   _expireUpdating(entityId) {
+    console.log("[EUM Debug] _expireUpdating called for:", entityId);
+    console.log("[EUM Debug] Current _updatingIds:", [...this._updatingIds.keys()]);
+    console.log("[EUM Debug] Current running state:", this.running);
+    
     const info = this._updatingIds.get(entityId);
+    if (info) {
+      const elapsed = Date.now() - info.startedAt;
+      console.log("[EUM Debug] Timer was set", elapsed, "ms ago for", entityId);
+    }
+    
     if (info?.timeoutId) clearTimeout(info.timeoutId);
     this._updatingIds.delete(entityId);
     this._updatingIds = new Map(this._updatingIds);
     this._addLocalResult(entityId, "failed", "Update timed out — device may be unresponsive");
+    
+    console.log("[EUM Debug] About to call _cancelUpdates from _expireUpdating");
     this._cancelUpdates();
     this._loadDevices();
   }
 
   _clearAllUpdatingTimers() {
-    for (const [, info] of this._updatingIds) {
+    console.log("[EUM Debug] _clearAllUpdatingTimers called, clearing:", [...this._updatingIds.keys()]);
+    for (const [entityId, info] of this._updatingIds) {
+      console.log("[EUM Debug] Clearing timer for:", entityId);
       if (info.timeoutId) clearTimeout(info.timeoutId);
     }
     this._updatingIds.clear();
@@ -419,6 +449,7 @@ class ESPHomeUpdatePanel extends LitElement {
     
     // Clean up completed enables after mapping
     if (toRemove.length > 0) {
+      console.log("[EUM Debug] Cleaning up completed enables:", toRemove);
       toRemove.forEach(entityId => {
         const info = this._pendingEnables.get(entityId);
         if (info?.timeoutId) clearTimeout(info.timeoutId);
@@ -505,6 +536,7 @@ class ESPHomeUpdatePanel extends LitElement {
   _startBackgroundStatusCheck() {
     // Check every 5 seconds if an update was started from backend
     if (this._backgroundCheckTimer) return;
+    console.log("[EUM Debug] Starting background status check");
     
     this._backgroundCheckTimer = setInterval(async () => {
       // Check URL for show_log parameter (in case notification was clicked)
@@ -515,6 +547,7 @@ class ESPHomeUpdatePanel extends LitElement {
         
         if (res.running && !this.running) {
           // Backend started an update, sync our state
+          console.log("[EUM Debug] Background check: backend started update, syncing state");
           this.running = true;
           this.results = res.results || [];
           this._restoreUpdatingState();
@@ -523,6 +556,7 @@ class ESPHomeUpdatePanel extends LitElement {
           this.requestUpdate();
         } else if (!res.running && this.running) {
           // Backend finished but we still think it's running
+          console.log("[EUM Debug] Background check: backend finished, syncing state");
           this.running = false;
           this.results = res.results || [];
           this._clearAllUpdatingTimers();
@@ -539,10 +573,17 @@ class ESPHomeUpdatePanel extends LitElement {
   }
 
   async _pollStatus() {
+    console.log("[EUM Debug] _pollStatus called, current _updatingIds:", [...this._updatingIds.keys()]);
     try {
       const res = await this.hass.callWS({ type: "esphome_update_manager/status" });
+      console.log("[EUM Debug] _pollStatus response:", res.running, res.results?.map(r => `${r.entity_id}:${r.status}`));
+      const wasRunning = this.running;
       this.running = res.running;
       this.results = res.results || [];
+      
+      if (wasRunning !== this.running) {
+        console.log("[EUM Debug] _pollStatus: running state changed from", wasRunning, "to", this.running);
+      }
 
       if (this._updatingIds.size > 0) {
         const activeIds = new Set(
@@ -550,10 +591,23 @@ class ESPHomeUpdatePanel extends LitElement {
             .filter((r) => r.status === "running" || r.status === "queued")
             .map((r) => r.entity_id)
         );
+        
         for (const [entityId, info] of this._updatingIds) {
           if (!activeIds.has(entityId)) {
+            console.log("[EUM Debug] _pollStatus: removing completed/cancelled entity from _updatingIds:", entityId);
             if (info.timeoutId) clearTimeout(info.timeoutId);
             this._updatingIds.delete(entityId);
+          } else {
+            const result = this.results.find((r) => r.entity_id === entityId);
+            if (result?.status === "running" && !info.isRunning) {
+              console.log("[EUM Debug] _pollStatus: device started running, resetting timer for:", entityId);
+              clearTimeout(info.timeoutId);
+              const timeoutId = setTimeout(() => {
+                console.log("[EUM Debug] Timeout expired for:", entityId);
+                this._expireUpdating(entityId);
+              }, UPDATING_TIMEOUT_MS);
+              this._updatingIds.set(entityId, { startedAt: Date.now(), timeoutId, isRunning: true });
+            }
           }
         }
         this._updatingIds = new Map(this._updatingIds);
@@ -584,6 +638,7 @@ class ESPHomeUpdatePanel extends LitElement {
   }
 
   async _enableEntity(entityId) {
+      console.log("[EUM Debug] _enableEntity called for:", entityId);
       // Clear expired state if user tries again
       this._expiredEnables.delete(entityId);
       this._savePendingToStorage();  // Save the cleared expired state
@@ -591,13 +646,16 @@ class ESPHomeUpdatePanel extends LitElement {
       const timeoutId = setTimeout(() => this._expireEnabling(entityId), ENABLING_TIMEOUT_MS);
       this._pendingEnables = new Map(this._pendingEnables);
       this._pendingEnables.set(entityId, { startedAt: Date.now(), timeoutId });
+      console.log("[EUM Debug] Enable timeout set for", entityId, "timeout:", ENABLING_TIMEOUT_MS, "ms");
       this._savePendingToStorage();
       this.requestUpdate();
       if (!this._enablingPollTimer) this._startEnablingPoll();
 
       try {
         await this.hass.callWS({ type: "esphome_update_manager/enable_entity", entity_id: entityId });
+        console.log("[EUM Debug] Enable entity WebSocket call completed for:", entityId);
       } catch (e) {
+        console.error("[EUM Debug] Enable entity failed for:", entityId, e);
         const info = this._pendingEnables.get(entityId);
         if (info?.timeoutId) clearTimeout(info.timeoutId);
         this._pendingEnables.delete(entityId);
@@ -616,6 +674,7 @@ class ESPHomeUpdatePanel extends LitElement {
   }
 
   async _updateSingle(entityId) {
+    console.log("[EUM Debug] _updateSingle called for:", entityId);
     const device = this.devices.find(d => d.entity_id === entityId);
     const versionInfo = {};
     if (device) {
@@ -625,9 +684,13 @@ class ESPHomeUpdatePanel extends LitElement {
       };
     }
 
-    const timeoutId = setTimeout(() => this._expireUpdating(entityId), UPDATING_TIMEOUT_MS);
+    const timeoutId = setTimeout(() => {
+      console.log("[EUM Debug] Single update timeout expired for:", entityId);
+      this._expireUpdating(entityId);
+    }, UPDATING_TIMEOUT_MS);
     this._updatingIds = new Map(this._updatingIds);
     this._updatingIds.set(entityId, { startedAt: Date.now(), timeoutId });
+    console.log("[EUM Debug] Update timeout set for", entityId, "timeout:", UPDATING_TIMEOUT_MS, "ms");
     this.requestUpdate();
 
     try {
@@ -637,9 +700,11 @@ class ESPHomeUpdatePanel extends LitElement {
         stop_addon_slug: this._getStopAddonSlug(),
         version_info: versionInfo,
       });
+      console.log("[EUM Debug] Single update started for:", entityId);
       this.running = true;
       this._startStatusPolling();
     } catch (e) {
+      console.error("[EUM Debug] Single update failed to start for:", entityId, e);
       const info = this._updatingIds.get(entityId);
       if (info?.timeoutId) clearTimeout(info.timeoutId);
       this._updatingIds.delete(entityId);
@@ -652,6 +717,7 @@ class ESPHomeUpdatePanel extends LitElement {
   async _startBatchUpdate() {
     if (this.selected.size === 0) return;
     const ids = [...this.selected];
+    console.log("[EUM Debug] _startBatchUpdate called for:", ids);
 
     const versionInfo = {};
     ids.forEach(id => {
@@ -666,8 +732,12 @@ class ESPHomeUpdatePanel extends LitElement {
 
     this._updatingIds = new Map(this._updatingIds);
     ids.forEach((id) => {
-      const timeoutId = setTimeout(() => this._expireUpdating(id), UPDATING_TIMEOUT_MS);
+      const timeoutId = setTimeout(() => {
+        console.log("[EUM Debug] Batch update timeout expired for:", id);
+        this._expireUpdating(id);
+      }, UPDATING_TIMEOUT_MS);
       this._updatingIds.set(id, { startedAt: Date.now(), timeoutId });
+      console.log("[EUM Debug] Batch update timeout set for", id, "timeout:", UPDATING_TIMEOUT_MS, "ms at", new Date().toISOString());
     });
     this.requestUpdate();
 
@@ -678,9 +748,11 @@ class ESPHomeUpdatePanel extends LitElement {
         stop_addon_slug: this._getStopAddonSlug(),
         version_info: versionInfo,
       });
+      console.log("[EUM Debug] Batch update started");
       this.running = true;
       this._startStatusPolling();
     } catch (e) {
+      console.error("[EUM Debug] Batch update failed to start:", e);
       ids.forEach((id) => {
         const info = this._updatingIds.get(id);
         if (info?.timeoutId) clearTimeout(info.timeoutId);
@@ -693,12 +765,15 @@ class ESPHomeUpdatePanel extends LitElement {
   }
 
   async _cancelUpdates() {
+    console.log("[EUM Debug] _cancelUpdates called");
+    console.log("[EUM Debug] Call stack:", new Error().stack);
     this._cancelling = true;
     this.requestUpdate();
     try {
       await this.hass.callWS({ type: "esphome_update_manager/cancel" });
+      console.log("[EUM Debug] Cancel WebSocket call completed");
     } catch (e) {
-      console.error("Cancel failed:", e);
+      console.error("[EUM Debug] Cancel failed:", e);
     }
     // _cancelling will be reset when running becomes false
   }
@@ -716,9 +791,11 @@ class ESPHomeUpdatePanel extends LitElement {
 
   _startStatusPolling() {
     if (this._pollInterval) return;
+    console.log("[EUM Debug] Starting status polling");
     this._pollInterval = setInterval(async () => {
       await this._pollStatus();
       if (!this.running) {
+        console.log("[EUM Debug] Status polling: running=false, stopping poll");
         clearInterval(this._pollInterval);
         this._pollInterval = null;
         this._clearAllUpdatingTimers();
@@ -1348,7 +1425,9 @@ if (!customElements.get("esphome-update-panel")) {
     if (document.visibilityState === 'visible') {
       const inactiveTime = Date.now() - lastActiveTime;
       const isOnPanel = window.location.pathname.includes('esphome-update-manager');
+      console.log("[EUM Debug] Visibility changed to visible, inactive time:", inactiveTime, "ms, on panel:", isOnPanel);
       if (inactiveTime > INACTIVE_THRESHOLD) {
+        console.log("[EUM Debug] Inactive threshold exceeded, reloading page");
         location.reload();
       }
     }
