@@ -16,3 +16,9 @@ STATUS_CANCELLED = "cancelled"
 
 # Default max log updates to store
 DEFAULT_MAX_LOG_BACKUPS = 5
+
+# Dashboard configuration
+CONF_DASHBOARD_URL = "dashboard_url"
+CONF_DASHBOARD_MODE = "dashboard_mode"
+DASHBOARD_MODE_LOCAL = "local"
+DASHBOARD_MODE_EXTERNAL = "external"
