@@ -30,6 +30,8 @@ class ESPHomeUpdatePanel extends LitElement {
       _tooltipY: { type: Number },
       _showMenu: { type: Boolean },
       _logBackups: { type: Array },
+      _isMixedSetup: { type: Boolean },
+      _dashboardAvailable: { type: Boolean },
     };
   }
 
@@ -61,6 +63,9 @@ class ESPHomeUpdatePanel extends LitElement {
     this._tooltipY = 0;
     this._showMenu = false;
     this._logBackups = [];
+    this._isMixedSetup = false;
+    this._dashboardAvailable = null;
+    this._dashboardSubscription = null;
     this._loadPendingFromStorage();
   }
 
@@ -74,7 +79,9 @@ class ESPHomeUpdatePanel extends LitElement {
       if (this.running) {
         this._restoreUpdatingState();
         this._startStatusPolling();
-      };
+      }
+    });
+    
     // Hide tooltip on scroll
     this._scrollHandler = () => {
       if (this._tooltipName) {
@@ -83,7 +90,6 @@ class ESPHomeUpdatePanel extends LitElement {
       }
     };
     window.addEventListener('scroll', this._scrollHandler, true);
-    });
     
     // Close menu when clicking outside
     this._documentClickHandler = (e) => {
@@ -101,6 +107,9 @@ class ESPHomeUpdatePanel extends LitElement {
     
     // Start polling immediately to catch backend-initiated updates
     this._startBackgroundStatusCheck();
+    
+    // Subscribe to dashboard status changes
+    this._subscribeToDashboardStatus();
     
     // Check URL for show_log parameter
     this._checkUrlForLogParam();
@@ -138,6 +147,31 @@ class ESPHomeUpdatePanel extends LitElement {
     }
     if (this._documentClickHandler) {
       document.removeEventListener('click', this._documentClickHandler);
+    }
+    if (this._dashboardSubscription) {
+      this._dashboardSubscription();
+      this._dashboardSubscription = null;
+    }
+  }
+
+  async _subscribeToDashboardStatus() {
+    try {
+      this._dashboardSubscription = await this.hass.connection.subscribeMessage(
+        (event) => {
+          console.log("Dashboard status event:", event);
+          const wasAvailable = this._dashboardAvailable;
+          this._dashboardAvailable = event.available;
+          
+          // If availability changed, reload devices
+          if (wasAvailable !== null && wasAvailable !== event.available) {
+            console.log("Dashboard availability changed:", wasAvailable, "->", event.available);
+            this._loadDevices();
+          }
+        },
+        { type: "esphome_update_manager/subscribe_dashboard_status" }
+      );
+    } catch (e) {
+      console.error("Failed to subscribe to dashboard status:", e);
     }
   }
 
@@ -190,7 +224,7 @@ class ESPHomeUpdatePanel extends LitElement {
     }, 2000);
   }
 
-  // ── Menu ────────────────────────────────────────────────���───────
+  // ── Menu ────────────────────────────────────────────────────────
 
   async _toggleMenu() {
     if (!this._showMenu) {
@@ -282,53 +316,53 @@ class ESPHomeUpdatePanel extends LitElement {
   // ── Pending Storage ─────────────────────────────────────────────
 
   _loadPendingFromStorage() {
-    try {
-      // Load pending enables
-      const stored = localStorage.getItem('esphome_pending_enables');
-      if (stored) {
-        const data = JSON.parse(stored);
-        const now = Date.now();
-        
-        for (const [entityId, info] of Object.entries(data)) {
-          const elapsed = now - info.startedAt;
-          const remaining = ENABLING_TIMEOUT_MS - elapsed;
+      try {
+        // Load pending enables
+        const stored = localStorage.getItem('esphome_pending_enables');
+        if (stored) {
+          const data = JSON.parse(stored);
+          const now = Date.now();
           
-          if (remaining > 0) {
-            // Still within timeout, restore it
-            const timeoutId = setTimeout(() => this._expireEnabling(entityId), remaining);
-            this._pendingEnables.set(entityId, { startedAt: info.startedAt, timeoutId });
-          } else {
-            // Timeout already expired, mark as expired
-            this._expiredEnables.add(entityId);
+          for (const [entityId, info] of Object.entries(data)) {
+            const elapsed = now - info.startedAt;
+            const remaining = ENABLING_TIMEOUT_MS - elapsed;
+            
+            if (remaining > 0) {
+              // Still within timeout, restore it
+              const timeoutId = setTimeout(() => this._expireEnabling(entityId), remaining);
+              this._pendingEnables.set(entityId, { startedAt: info.startedAt, timeoutId });
+            } else {
+              // Timeout already expired, mark as expired
+              this._expiredEnables.add(entityId);
+            }
           }
         }
+        
+        // Load expired enables
+        const storedExpired = localStorage.getItem('esphome_expired_enables');
+        if (storedExpired) {
+          const expiredList = JSON.parse(storedExpired);
+          expiredList.forEach(entityId => this._expiredEnables.add(entityId));
+        }
+      } catch (e) {
+        console.error("Failed to load pending enables from storage", e);
       }
-      
-      // Load expired enables
-      const storedExpired = localStorage.getItem('esphome_expired_enables');
-      if (storedExpired) {
-        const expiredList = JSON.parse(storedExpired);
-        expiredList.forEach(entityId => this._expiredEnables.add(entityId));
-      }
-    } catch (e) {
-      console.error("Failed to load pending enables from storage", e);
-    }
   }
 
   _savePendingToStorage() {
-    try {
-      // Save pending enables
-      const data = {};
-      for (const [entityId, info] of this._pendingEnables) {
-        data[entityId] = { startedAt: info.startedAt };
+      try {
+        // Save pending enables
+        const data = {};
+        for (const [entityId, info] of this._pendingEnables) {
+          data[entityId] = { startedAt: info.startedAt };
+        }
+        localStorage.setItem('esphome_pending_enables', JSON.stringify(data));
+        
+        // Save expired enables
+        localStorage.setItem('esphome_expired_enables', JSON.stringify([...this._expiredEnables]));
+      } catch (e) {
+        console.error("Failed to save pending enables to storage", e);
       }
-      localStorage.setItem('esphome_pending_enables', JSON.stringify(data));
-      
-      // Save expired enables
-      localStorage.setItem('esphome_expired_enables', JSON.stringify([...this._expiredEnables]));
-    } catch (e) {
-      console.error("Failed to save pending enables to storage", e);
-    }
   }
 
   // ── Data ────────────────────────────────────────────────────────
@@ -354,17 +388,17 @@ class ESPHomeUpdatePanel extends LitElement {
   }
 
   _expireEnabling(entityId) {
-    const info = this._pendingEnables.get(entityId);
-    if (info?.timeoutId) clearTimeout(info.timeoutId);
-    this._pendingEnables.delete(entityId);
-    this._pendingEnables = new Map(this._pendingEnables);
-    
-    // Remember this entity's enable has expired
-    this._expiredEnables.add(entityId);
-    
-    this._savePendingToStorage();
-    this._loadDevices();
-    this.requestUpdate();
+      const info = this._pendingEnables.get(entityId);
+      if (info?.timeoutId) clearTimeout(info.timeoutId);
+      this._pendingEnables.delete(entityId);
+      this._pendingEnables = new Map(this._pendingEnables);
+      
+      // Remember this entity's enable has expired
+      this._expiredEnables.add(entityId);
+      
+      this._savePendingToStorage();
+      this._loadDevices();
+      this.requestUpdate();
   }
 
   _isUpdatingPending(entityId) {
@@ -435,11 +469,19 @@ class ESPHomeUpdatePanel extends LitElement {
   async _loadDevices() {
     try {
       const res = await this.hass.callWS({ type: "esphome_update_manager/devices" });
-      this.devices = res.devices || [];
+      const newDevices = res.devices || [];
+      this._isMixedSetup = res.is_mixed_setup || false;
+      
+      // Force new array reference to trigger LitElement update
+      this.devices = [...newDevices];
+      
       const merged = this._mergedDevices();
       const hasEnabling = merged.some((d) => d.enabling) || this._pendingEnables.size > 0;
       if (hasEnabling && !this._enablingPollTimer) this._startEnablingPoll();
       else if (!hasEnabling && this._enablingPollTimer) this._stopEnablingPoll();
+      
+      // Force re-render
+      this.requestUpdate();
     } catch (e) {
       console.error("Failed to load devices", e);
     }
@@ -550,21 +592,10 @@ class ESPHomeUpdatePanel extends LitElement {
             .filter((r) => r.status === "running" || r.status === "queued")
             .map((r) => r.entity_id)
         );
-        
         for (const [entityId, info] of this._updatingIds) {
           if (!activeIds.has(entityId)) {
             if (info.timeoutId) clearTimeout(info.timeoutId);
             this._updatingIds.delete(entityId);
-          } else {
-            // Reset timer when device starts running (transitions from queued to running)
-            const result = this.results.find((r) => r.entity_id === entityId);
-            if (result?.status === "running" && !info.isRunning) {
-              clearTimeout(info.timeoutId);
-              const timeoutId = setTimeout(() => {
-                this._expireUpdating(entityId);
-              }, UPDATING_TIMEOUT_MS);
-              this._updatingIds.set(entityId, { startedAt: Date.now(), timeoutId, isRunning: true });
-            }
           }
         }
         this._updatingIds = new Map(this._updatingIds);
@@ -574,7 +605,7 @@ class ESPHomeUpdatePanel extends LitElement {
     }
   }
 
-  // ── Actions ────────────────────────────────────────────────────���
+  // ── Actions ─────────────────────────────────────────────────────
 
   _toggleSelect(entityId) {
     if (this.selected.has(entityId)) this.selected.delete(entityId);
@@ -595,28 +626,28 @@ class ESPHomeUpdatePanel extends LitElement {
   }
 
   async _enableEntity(entityId) {
-    // Clear expired state if user tries again
-    this._expiredEnables.delete(entityId);
-    this._savePendingToStorage();  // Save the cleared expired state
-    
-    const timeoutId = setTimeout(() => this._expireEnabling(entityId), ENABLING_TIMEOUT_MS);
-    this._pendingEnables = new Map(this._pendingEnables);
-    this._pendingEnables.set(entityId, { startedAt: Date.now(), timeoutId });
-    this._savePendingToStorage();
-    this.requestUpdate();
-    if (!this._enablingPollTimer) this._startEnablingPoll();
-
-    try {
-      await this.hass.callWS({ type: "esphome_update_manager/enable_entity", entity_id: entityId });
-    } catch (e) {
-      const info = this._pendingEnables.get(entityId);
-      if (info?.timeoutId) clearTimeout(info.timeoutId);
-      this._pendingEnables.delete(entityId);
+      // Clear expired state if user tries again
+      this._expiredEnables.delete(entityId);
+      this._savePendingToStorage();  // Save the cleared expired state
+      
+      const timeoutId = setTimeout(() => this._expireEnabling(entityId), ENABLING_TIMEOUT_MS);
       this._pendingEnables = new Map(this._pendingEnables);
+      this._pendingEnables.set(entityId, { startedAt: Date.now(), timeoutId });
       this._savePendingToStorage();
-      this._addLocalResult(entityId, "failed", "Enable failed: " + e.message);
       this.requestUpdate();
-    }
+      if (!this._enablingPollTimer) this._startEnablingPoll();
+
+      try {
+        await this.hass.callWS({ type: "esphome_update_manager/enable_entity", entity_id: entityId });
+      } catch (e) {
+        const info = this._pendingEnables.get(entityId);
+        if (info?.timeoutId) clearTimeout(info.timeoutId);
+        this._pendingEnables.delete(entityId);
+        this._pendingEnables = new Map(this._pendingEnables);
+        this._savePendingToStorage();
+        this._addLocalResult(entityId, "failed", "Enable failed: " + e.message);
+        this.requestUpdate();
+      }
   }
 
   _getStopAddonSlug() {
@@ -909,7 +940,9 @@ class ESPHomeUpdatePanel extends LitElement {
         font-style: italic;
         font-size: 0.5em;
       }
-
+      .name.failed {
+        color: #f44336;
+      }
       .toolbar {
         display: flex; align-items: center; gap: 8px;
         margin: 16px 0; padding: 8px 12px;
@@ -1267,6 +1300,10 @@ class ESPHomeUpdatePanel extends LitElement {
     const btn = this._getDeviceButton(d);
     const canSelect = this._canSelect(d);
     const isOffline = d.online === false;
+    
+    const displayName = (this._isMixedSetup && d.is_external) 
+      ? `${d.name} (ext)` 
+      : d.name;
 
     return html`
       <div class="device-row ${isOffline ? "offline" : ""}">
@@ -1280,10 +1317,10 @@ class ESPHomeUpdatePanel extends LitElement {
           `}
         </span>
         <span class="online-status">${this._onlineIcon(d.online)}</span>
-        <span class="name" 
+        <span class="name ${d.failed ? 'failed' : ''}" 
           @click=${(e) => this._showNameTooltip(e, d.name)}
           title="${d.name}">
-          ${d.name}
+          ${displayName}
         </span>
         <span class="version">
           ${d.current_version || "?"}${(d.update_available || d.skipped) && d.latest_version
@@ -1358,6 +1395,7 @@ if (!customElements.get("esphome-update-panel")) {
 
     if (document.visibilityState === 'visible') {
       const inactiveTime = Date.now() - lastActiveTime;
+      const isOnPanel = window.location.pathname.includes('esphome-update-manager');
       if (inactiveTime > INACTIVE_THRESHOLD) {
         location.reload();
       }
