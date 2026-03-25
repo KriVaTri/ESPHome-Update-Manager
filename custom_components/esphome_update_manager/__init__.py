@@ -856,10 +856,13 @@ def _is_update_available(installed: str | None, latest: str | None) -> bool:
 
 
 def _is_esphome_version(version: str | None) -> bool:
-    """Check if version string looks like an ESPHome version (YYYY.M.x format)."""
+    """Check if version string contains an ESPHome version (YYYY.M.x format)."""
     if not version:
-        return True  # Allow None/empty - could be offline ESPHome device
-    return str(version).startswith("20")
+        return True
+    v = str(version)
+    if re.search(r"20\d{2}\.\d+\.\d+", v):
+        return True
+    return False
 
 
 def _get_local_esphome_builder_version(hass: HomeAssistant) -> str | None:
