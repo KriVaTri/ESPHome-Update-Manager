@@ -272,6 +272,25 @@ The integration handles various failure scenarios gracefully:
 
 ## Troubleshooting
 
+### Switching devices between local and external dashboard
+To move a device from one dashboard to another, follow these steps:
+
+**From local to external:**
+1. Remove the YAML file from the local ESPHome add-on
+2. Add the YAML file to the external ESPHome dashboard
+3. Remove the device from the ESPHome integration in Home Assistant
+4. Re-add the device to the ESPHome integration
+5. The device will now be managed by the external dashboard
+
+**From external to local:**
+1. Remove the YAML file from the external ESPHome dashboard
+2. Add the YAML file to the local ESPHome add-on
+3. Remove the device from the ESPHome integration in Home Assistant
+4. Re-add the device to the ESPHome integration
+5. The device will now be managed by the local ESPHome add-on
+
+> **Note:** Removing and re-adding the device ensures that firmware entities are properly recreated and the integration correctly detects the dashboard source.
+
 ### Panel does not appear in sidebar
 - Make sure the integration is added via Settings → Devices & Services
 - Check that `esphome-update-panel.js` exists in `config/www/esphome-update-manager/`
