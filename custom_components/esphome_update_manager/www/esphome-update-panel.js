@@ -373,10 +373,14 @@ class ESPHomeUpdatePanel extends LitElement {
     for (const r of this.results) {
       if (r.status === "running" || r.status === "queued") {
         if (!this._updatingIds.has(r.entity_id)) {
-          const timeoutId = setTimeout(() => {
-            this._expireUpdating(r.entity_id);
-          }, UPDATING_TIMEOUT_MS);
-          this._updatingIds.set(r.entity_id, { startedAt: Date.now(), timeoutId });
+          if (r.status === "running") {
+            const timeoutId = setTimeout(() => {
+              this._expireUpdating(r.entity_id);
+            }, UPDATING_TIMEOUT_MS);
+            this._updatingIds.set(r.entity_id, { startedAt: Date.now(), timeoutId, isRunning: true });
+          } else {
+            this._updatingIds.set(r.entity_id, { startedAt: null, timeoutId: null, isRunning: false });
+          }
         }
       }
     }
@@ -583,6 +587,7 @@ class ESPHomeUpdatePanel extends LitElement {
   async _pollStatus() {
     try {
       const res = await this.hass.callWS({ type: "esphome_update_manager/status" });
+      
       this.running = res.running;
       this.results = res.results || [];
 
@@ -592,16 +597,38 @@ class ESPHomeUpdatePanel extends LitElement {
             .filter((r) => r.status === "running" || r.status === "queued")
             .map((r) => r.entity_id)
         );
+        
         for (const [entityId, info] of this._updatingIds) {
           if (!activeIds.has(entityId)) {
             if (info.timeoutId) clearTimeout(info.timeoutId);
             this._updatingIds.delete(entityId);
+          } else {
+            const result = this.results.find((r) => r.entity_id === entityId);
+            
+            if (result?.status === "running" && !info.isRunning) {
+              if (info.timeoutId) clearTimeout(info.timeoutId);
+              const timeoutId = setTimeout(() => {
+                this._expireUpdating(entityId);
+              }, UPDATING_TIMEOUT_MS);
+              this._updatingIds.set(entityId, { startedAt: Date.now(), timeoutId, isRunning: true });
+            }
           }
         }
         this._updatingIds = new Map(this._updatingIds);
       }
+
+      if (!this.running && this._pollInterval) {
+        clearInterval(this._pollInterval);
+        this._pollInterval = null;
+        this._clearAllUpdatingTimers();
+        this._cancelling = false;
+        this.selected.clear();
+        await this._loadDevices();
+        await this._loadAddonInfo();
+        this.requestUpdate();
+      }
     } catch (e) {
-      // Not yet available
+      console.error("_pollStatus error:", e);
     }
   }
 
@@ -708,8 +735,7 @@ class ESPHomeUpdatePanel extends LitElement {
 
     this._updatingIds = new Map(this._updatingIds);
     ids.forEach((id) => {
-      const timeoutId = setTimeout(() => this._expireUpdating(id), UPDATING_TIMEOUT_MS);
-      this._updatingIds.set(id, { startedAt: Date.now(), timeoutId });
+      this._updatingIds.set(id, { startedAt: null, timeoutId: null, isRunning: false });
     });
     this.requestUpdate();
 
@@ -724,8 +750,6 @@ class ESPHomeUpdatePanel extends LitElement {
       this._startStatusPolling();
     } catch (e) {
       ids.forEach((id) => {
-        const info = this._updatingIds.get(id);
-        if (info?.timeoutId) clearTimeout(info.timeoutId);
         this._updatingIds.delete(id);
         this._addLocalResult(id, "failed", "Batch update failed to start: " + e.message);
       });
