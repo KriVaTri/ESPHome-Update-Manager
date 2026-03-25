@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import traceback
 from datetime import datetime
 from typing import Any
 
@@ -10,6 +11,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.components.update import DOMAIN as UPDATE_DOMAIN, ATTR_IN_PROGRESS
 
 from .const import (
+    DOMAIN,
     DEFAULT_UPDATE_TIMEOUT,
     DEFAULT_DELAY_BETWEEN,
     STATUS_QUEUED,
@@ -90,7 +92,7 @@ class UpdateQueue:
             version_info = {}
 
         _LOGGER.debug("Starting update queue with %d entities: %s", len(entity_ids), entity_ids)
-        
+
         self._queue = [
             DeviceUpdateResult(
                 eid,
@@ -109,7 +111,6 @@ class UpdateQueue:
     def cancel(self) -> None:
         _LOGGER.warning("Cancel requested - setting _cancelled = True (was: %s)", self._cancelled)
         # Log stack trace to see where cancel was called from
-        import traceback
         _LOGGER.debug("Cancel call stack:\n%s", "".join(traceback.format_stack()))
         
         self._cancelled = True
@@ -237,7 +238,22 @@ class UpdateQueue:
         while not self._cancelled:
             await asyncio.sleep(1)
 
+    def _is_external_device(self, entity_id: str) -> bool:
+        """Check if this is an external dashboard device."""
+        return entity_id.startswith("external:")
+
+    def _get_external_config(self, entity_id: str) -> str:
+        """Extract configuration name from external entity_id."""
+        # Format: external:device-name.yaml or external:device-name
+        config = entity_id.replace("external:", "", 1)
+        if not config.endswith(".yaml"):
+            config = f"{config}.yaml"
+        return config
+
     def _is_entity_available(self, entity_id: str) -> bool:
+        """Check if entity is available. External devices are always 'available'."""
+        if self._is_external_device(entity_id):
+            return True
         state = self.hass.states.get(entity_id)
         if state is None:
             return False
@@ -249,6 +265,12 @@ class UpdateQueue:
         item.started_at = datetime.now()
 
         try:
+            # Check if this is an external device
+            if self._is_external_device(item.entity_id):
+                await self._update_external_device(item)
+                return
+
+            # Local device - check availability
             if not self._is_entity_available(item.entity_id):
                 _LOGGER.info("Device %s unavailable - skipping", item.entity_id)
                 item.status = STATUS_SKIPPED
@@ -256,6 +278,7 @@ class UpdateQueue:
                 item.finished_at = datetime.now()
                 return
 
+            # Local device - use HA service call
             _LOGGER.debug("Calling update.install for %s", item.entity_id)
             try:
                 await self.hass.services.async_call(
@@ -266,10 +289,8 @@ class UpdateQueue:
                 )
                 _LOGGER.debug("update.install call completed for %s", item.entity_id)
             except Exception as install_err:
-                # Compile error, OTA error, etc.
                 error_msg = str(install_err)
                 _LOGGER.error("Install failed for %s: %s", item.entity_id, error_msg)
-                # Clean up the message for display
                 if "Error compiling" in error_msg:
                     item.status = STATUS_FAILED
                     item.error = f"Compile failed — {error_msg}"
@@ -279,14 +300,12 @@ class UpdateQueue:
                 item.finished_at = datetime.now()
                 return
 
-            # If we get here, install call succeeded — verify completion
+            # Verify completion
             state = self.hass.states.get(item.entity_id)
             if state and state.state == "off":
-                # Already done (fast update)
                 _LOGGER.debug("Device %s already shows state=off, marking success", item.entity_id)
                 item.status = STATUS_SUCCESS
             else:
-                # Wait for OTA + reboot to finish
                 _LOGGER.debug("Waiting for completion of %s (current state: %s)", 
                             item.entity_id, state.state if state else "None")
                 success, error_reason = await self._wait_for_completion(item.entity_id)
@@ -315,6 +334,85 @@ class UpdateQueue:
         finally:
             item.finished_at = item.finished_at or datetime.now()
             _LOGGER.debug("_update_single finished for %s, status=%s", item.entity_id, item.status)
+
+    async def _update_external_device(self, item: DeviceUpdateResult) -> None:
+        """Update a device via the external ESPHome dashboard."""
+        from .dashboard import ExternalDashboardCoordinator
+
+        coordinator: ExternalDashboardCoordinator | None = self.hass.data[DOMAIN].get("external_dashboard")
+        
+        if not coordinator:
+            item.status = STATUS_FAILED
+            item.error = "External dashboard not configured"
+            item.finished_at = datetime.now()
+            return
+
+        if not coordinator.available:
+            item.status = STATUS_FAILED
+            item.error = "External dashboard not reachable"
+            item.finished_at = datetime.now()
+            return
+
+        # Get configuration name
+        configuration = self._get_external_config(item.entity_id)
+        
+        _LOGGER.info("Updating external device via dashboard: %s", configuration)
+
+        # Step 1: Compile
+        _LOGGER.info("Compiling %s on external dashboard...", configuration)
+        try:
+            compile_success = await coordinator.async_compile(configuration)
+            if not compile_success:
+                item.status = STATUS_FAILED
+                item.error = "Compile failed on external dashboard. Try again in ESPHome dashboard for more information"
+                item.finished_at = datetime.now()
+                return
+        except Exception as err:
+            item.status = STATUS_FAILED
+            item.error = f"Compile error: {err}"
+            item.finished_at = datetime.now()
+            return
+
+        if self._cancelled:
+            item.status = STATUS_CANCELLED
+            item.error = "Cancelled by user"
+            item.finished_at = datetime.now()
+            return
+
+        # Step 2: Upload via OTA
+        _LOGGER.info("Uploading %s via OTA...", configuration)
+        try:
+            upload_success = await coordinator.async_upload(configuration, "OTA")
+            if not upload_success:
+                item.status = STATUS_FAILED
+                item.error = "OTA upload failed on external dashboard. Try again in ESPHome dashboard for more information"
+                item.finished_at = datetime.now()
+                return
+        except Exception as err:
+            item.status = STATUS_FAILED
+            item.error = f"Upload error: {err}"
+            item.finished_at = datetime.now()
+            return
+
+        if self._cancelled:
+            item.status = STATUS_CANCELLED
+            item.error = "Cancelled by user"
+            item.finished_at = datetime.now()
+            return
+
+        # Step 3: Wait for device to come back online
+        _LOGGER.info("Waiting for device to reboot...")
+        await asyncio.sleep(10)  # Give device time to reboot
+
+        # Refresh coordinator to get new version info
+        try:
+            await coordinator.async_request_refresh()
+        except Exception:
+            pass  # Ignore refresh errors
+
+        item.status = STATUS_SUCCESS
+        item.finished_at = datetime.now()
+        _LOGGER.info("External device %s updated successfully", configuration)
 
     async def _wait_for_start(
         self, entity_id: str, timeout: int = INITIAL_PROGRESS_TIMEOUT
