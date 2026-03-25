@@ -94,8 +94,6 @@ class ESPHomeUpdateManagerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 # Determine mode based on URL presence
                 mode = DASHBOARD_MODE_EXTERNAL if url else DASHBOARD_MODE_LOCAL
                 title = "ESPHome Update Manager"
-                if url:
-                    title += " (External)"
                 
                 return self.async_create_entry(
                     title=title,
@@ -191,9 +189,10 @@ class ESPHomeUpdateManagerOptionsFlow(config_entries.OptionsFlowWithConfigEntry)
                 old_url = self.config_entry.data.get(CONF_DASHBOARD_URL)
                 dashboard_changed = (url != old_url)
                 
-                # Update config entry data
+                # Update config entry data AND title
                 self.hass.config_entries.async_update_entry(
                     self.config_entry,
+                    title="ESPHome Update Manager",
                     data={
                         CONF_DASHBOARD_MODE: mode,
                         CONF_DASHBOARD_URL: url.rstrip("/") if url else None,
