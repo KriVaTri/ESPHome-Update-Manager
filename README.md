@@ -279,15 +279,17 @@ To move a device from one dashboard to another, follow these steps:
 1. Remove the YAML file from the local ESPHome add-on
 2. Add the YAML file to the external ESPHome dashboard
 3. Remove the device from the ESPHome integration in Home Assistant
-4. Re-add the device to the ESPHome integration
-5. The device will now be managed by the external dashboard
+4. Restart HA
+5. Re-add the device to the ESPHome integration
+6. The device will now be managed by the external dashboard
 
 **From external to local:**
 1. Remove the YAML file from the external ESPHome dashboard
 2. Add the YAML file to the local ESPHome add-on
 3. Remove the device from the ESPHome integration in Home Assistant
-4. Re-add the device to the ESPHome integration
-5. The device will now be managed by the local ESPHome add-on
+4. Restart HA
+5. Re-add the device to the ESPHome integration
+6. The device will now be managed by the local ESPHome add-on
 
 > **Note:** Removing and re-adding the device ensures that firmware entities are properly recreated and the integration correctly detects the dashboard source.
 
