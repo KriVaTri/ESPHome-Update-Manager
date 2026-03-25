@@ -23,7 +23,15 @@ from homeassistant.helpers.event import async_track_state_change_event
 from homeassistant.helpers.storage import Store
 from homeassistant.helpers.start import async_at_started
 
-from .const import DOMAIN, DEFAULT_MAX_LOG_BACKUPS
+from .const import (
+    DOMAIN,
+    DEFAULT_MAX_LOG_BACKUPS,
+    CONF_DASHBOARD_URL,
+    CONF_DASHBOARD_MODE,
+    DASHBOARD_MODE_LOCAL,
+    DASHBOARD_MODE_EXTERNAL,
+)
+from .dashboard import ExternalDashboardCoordinator
 from .update_queue import UpdateQueue
 
 _LOGGER = logging.getLogger(__name__)
@@ -57,6 +65,49 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     queue = UpdateQueue(hass)
     hass.data[DOMAIN]["queue"] = queue
 
+    # Setup dashboard coordinator based on mode
+    dashboard_mode = entry.data.get(CONF_DASHBOARD_MODE, DASHBOARD_MODE_LOCAL)
+    dashboard_url = entry.data.get(CONF_DASHBOARD_URL)
+
+    if dashboard_mode == DASHBOARD_MODE_EXTERNAL and dashboard_url:
+        # External dashboard - create our own coordinator
+        external_coordinator = ExternalDashboardCoordinator(hass, dashboard_url)
+        hass.data[DOMAIN]["external_dashboard"] = external_coordinator
+        hass.data[DOMAIN]["dashboard_mode"] = DASHBOARD_MODE_EXTERNAL
+        
+        # Connect in background - don't block HA startup
+        async def _connect_external_dashboard():
+            try:
+                # Use short timeout for initial check
+                if await external_coordinator.async_check_connection(timeout=3):
+                    await external_coordinator.async_config_entry_first_refresh()
+                    _LOGGER.info(
+                        "Connected to external ESPHome dashboard at %s (version %s)",
+                        dashboard_url,
+                        external_coordinator.esphome_version,
+                    )
+                else:
+                    _LOGGER.warning(
+                        "External ESPHome dashboard at %s is not reachable. "
+                        "Will retry periodically.",
+                        dashboard_url,
+                    )
+            except Exception as err:
+                _LOGGER.warning(
+                    "Failed to connect to external ESPHome dashboard at %s: %s. "
+                    "Will retry periodically.",
+                    dashboard_url,
+                    err,
+                )
+
+        hass.async_create_task(_connect_external_dashboard())
+        # Keep coordinator polling by adding a listener
+        external_coordinator.async_add_listener(lambda: None)
+    else:
+        hass.data[DOMAIN]["external_dashboard"] = None
+        hass.data[DOMAIN]["dashboard_mode"] = DASHBOARD_MODE_LOCAL
+        _LOGGER.info("Using local ESPHome dashboard (Supervisor add-on)")
+
     # Load stored settings
     store = Store(hass, STORAGE_VERSION, STORAGE_KEY)
     stored_settings = await store.async_load()
@@ -66,6 +117,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data[DOMAIN]["store"] = store
     hass.data[DOMAIN]["settings"] = stored_settings
     hass.data[DOMAIN]["unsubscribe_listeners"] = []
+    hass.data[DOMAIN]["failed_devices"] = stored_settings.get("failed_devices", {})
 
     websocket_api.async_register_command(hass, ws_get_devices)
     websocket_api.async_register_command(hass, ws_start_updates)
@@ -79,6 +131,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     websocket_api.async_register_command(hass, ws_get_update_log)
     websocket_api.async_register_command(hass, ws_list_log_backups)
     websocket_api.async_register_command(hass, ws_get_log_backup)
+    websocket_api.async_register_command(hass, ws_subscribe_dashboard_status)
 
     # Copy frontend files to www
     source = Path(__file__).parent / "www" / "esphome-update-panel.js"
@@ -117,6 +170,28 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         # Only process if there are actual results
         if not results:
             return
+        
+        # Track failed devices for auto-update cooldown
+        failed_devices = hass.data[DOMAIN].get("failed_devices", {})
+        
+        for r in results:
+            entity_id = r.get("entity_id")
+            status = r.get("status")
+            
+            if status == "failed" and entity_id:
+                failed_devices[entity_id] = True
+                _LOGGER.debug("Added %s to failed devices - requires manual update", entity_id)
+            elif status == "success" and entity_id in failed_devices:
+                failed_devices.pop(entity_id, None)
+                _LOGGER.debug("Removed %s from failed devices - manual update succeeded", entity_id)
+        
+        hass.data[DOMAIN]["failed_devices"] = failed_devices
+        
+        # Save failed devices to storage
+        settings = hass.data[DOMAIN].get("settings", {})
+        settings["failed_devices"] = failed_devices
+        store: Store = hass.data[DOMAIN]["store"]
+        await store.async_save(settings)
         
         # Only process if at least one update was attempted (not just queued/cancelled)
         attempted_statuses = {"success", "failed", "skipped"}
@@ -371,6 +446,9 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data[DOMAIN].pop("settings", None)
     hass.data[DOMAIN].pop("unsubscribe_listeners", None)
     hass.data[DOMAIN].pop("unsub_finished", None)
+    hass.data[DOMAIN].pop("external_dashboard", None)
+    hass.data[DOMAIN].pop("dashboard_mode", None)
+    hass.data[DOMAIN].pop("failed_devices", None)
     return True
 
 
@@ -563,6 +641,9 @@ async def _check_and_start_auto_update(hass: HomeAssistant) -> None:
     if queue.is_running:
         return
     
+    # Get failed devices (permanent until manual success)
+    failed_devices = hass.data[DOMAIN].get("failed_devices", {})
+    
     # Get all devices with available updates
     devices = _get_esphome_update_entities(hass)
     
@@ -570,8 +651,15 @@ async def _check_and_start_auto_update(hass: HomeAssistant) -> None:
     version_info = {}
     
     for d in devices:
+        entity_id = d["entity_id"]
+        
+        # Skip devices that previously failed
+        if entity_id in failed_devices:
+            _LOGGER.debug("Skipping %s - previously failed, requires manual update", entity_id)
+            continue
+        
         if (
-            d["entity_id"]
+            entity_id
             and d["update_available"]
             and not d["firmware_disabled"]
             and not d["firmware_unavailable"]
@@ -579,8 +667,8 @@ async def _check_and_start_auto_update(hass: HomeAssistant) -> None:
             and d["online"] is not False
             and not d["in_progress"]
         ):
-            updatable.append(d["entity_id"])
-            version_info[d["entity_id"]] = {
+            updatable.append(entity_id)
+            version_info[entity_id] = {
                 "from": d["current_version"],
                 "to": d["latest_version"],
             }
@@ -772,10 +860,10 @@ def _is_esphome_version(version: str | None) -> bool:
     if not version:
         return True  # Allow None/empty - could be offline ESPHome device
     return str(version).startswith("20")
-#   return bool(re.match(r"^20[2-9]\d\.\d{1,2}\.\d+$", str(version))) # if "20" is not sufficient then use this line instead
 
 
-def _get_esphome_builder_version(hass: HomeAssistant) -> str | None:
+def _get_local_esphome_builder_version(hass: HomeAssistant) -> str | None:
+    """Get the ESPHome version from the local HA add-on."""
     state = hass.states.get(BUILDER_ENTITY_ID)
     if state:
         installed = state.attributes.get("installed_version")
@@ -796,6 +884,32 @@ def _get_esphome_builder_version(hass: HomeAssistant) -> str | None:
                     return _parse_version(latest)
 
     return None
+
+
+def _get_external_dashboard_version(hass: HomeAssistant) -> str | None:
+    """Get the ESPHome version from the external dashboard."""
+    coordinator: ExternalDashboardCoordinator | None = hass.data[DOMAIN].get("external_dashboard")
+    if coordinator and coordinator.esphome_version:
+        return _parse_version(coordinator.esphome_version)
+    return None
+
+
+def _normalize_device_name(name: str) -> str:
+    """Normalize device name for matching (ESPHome style: lowercase, spaces/underscores to dashes)."""
+    return name.lower().replace(" ", "-").replace("_", "-")
+
+
+def _match_device_to_external_dashboard(
+    hass: HomeAssistant,
+    device_name: str,
+) -> dict | None:
+    """Match a HA device to an external dashboard device. Returns device info if found."""
+    coordinator: ExternalDashboardCoordinator | None = hass.data[DOMAIN].get("external_dashboard")
+    if not coordinator or not coordinator.data:
+        return None
+    
+    # Use the coordinator's matching method
+    return coordinator.get_device_by_name(device_name)
 
 
 def _find_status_entity(
@@ -843,13 +957,66 @@ def _get_device_sw_version(
     return None
 
 
+def _find_ha_device_by_name(hass: HomeAssistant, name: str) -> dr.DeviceEntry | None:
+    """Find a HA device by name (for external devices that exist in HA but have no update entity)."""
+    dev_reg = dr.async_get(hass)
+    esphome_device_ids = _get_esphome_device_ids(hass)
+    
+    normalized_search = _normalize_device_name(name)
+    
+    for device in dev_reg.devices.values():
+        if device.id not in esphome_device_ids:
+            continue
+        
+        device_name = device.name_by_user or device.name
+        if device_name and _normalize_device_name(device_name) == normalized_search:
+            return device
+    
+    return None
+
+
 def _get_esphome_update_entities(hass: HomeAssistant) -> list[dict[str, Any]]:
+    """Get all ESPHome update entities with their status.
+    
+    This function handles both local and external dashboard devices:
+    - Local devices: compared against local ESPHome add-on version
+    - External devices: compared against external dashboard version
+    
+    Only devices that exist in the ESPHome integration are shown.
+    """
     ent_reg = er.async_get(hass)
     dev_reg = dr.async_get(hass)
-    builder_version = _get_esphome_builder_version(hass)
+    
+    # Get versions from both sources
+    local_builder_version = _get_local_esphome_builder_version(hass)
+    external_builder_version = _get_external_dashboard_version(hass)
+    
+    # Check if we're using external dashboard
+    dashboard_mode = hass.data[DOMAIN].get("dashboard_mode", DASHBOARD_MODE_LOCAL)
+    external_coordinator: ExternalDashboardCoordinator | None = hass.data[DOMAIN].get("external_dashboard")
+    
+    # Check if external dashboard is available
+    external_dashboard_available = (
+        external_coordinator is not None 
+        and external_coordinator.available
+    )
+    
+    # Load remembered external devices from storage
+    settings = hass.data[DOMAIN].get("settings", {})
+    remembered_external_devices: dict[str, bool] = dict(settings.get("external_devices", {}))
+    remembered_external_devices_changed = False
+    
+    # Get failed devices for marking
+    failed_devices = hass.data[DOMAIN].get("failed_devices", {})
+    
     devices = []
-
     esphome_device_ids = _get_esphome_device_ids(hass)
+    
+    # Track which external devices we've already processed (by normalized name)
+    processed_external_devices: set[str] = set()
+    
+    # Track which device_ids we've processed (for cleanup)
+    processed_device_ids: set[str] = set()
 
     esphome_update_entities: list[er.RegistryEntry] = []
     devices_with_update_entity: set[str] = set()
@@ -874,12 +1041,42 @@ def _get_esphome_update_entities(hass: HomeAssistant) -> list[dict[str, Any]]:
             device = dev_reg.async_get(device_id)
             if device:
                 name = device.name_by_user or device.name or entity_id
+            processed_device_ids.add(device_id)
 
         online = _is_device_online(hass, ent_reg, device_id)
         state = hass.states.get(entity_id)
 
+        # Check if this device is managed by external dashboard
+        external_device_info = None
+        is_external_device = False
+        is_dashboard_unavailable = False
+        builder_version = local_builder_version  # Default to local
+        
+        normalized_name = _normalize_device_name(name)
+        
+        if dashboard_mode == DASHBOARD_MODE_EXTERNAL and external_coordinator:
+            external_device_info = _match_device_to_external_dashboard(hass, name)
+            if external_device_info:
+                is_external_device = True
+                builder_version = external_builder_version
+                # Mark as processed
+                processed_external_devices.add(normalized_name)
+                # Check if dashboard is available for updates
+                if not external_dashboard_available:
+                    is_dashboard_unavailable = True
+                # Remember this device as external
+                if normalized_name not in remembered_external_devices:
+                    remembered_external_devices[normalized_name] = True
+                    remembered_external_devices_changed = True
+
         if is_disabled:
             installed = registry_version
+            
+            # For external devices, use deployed_version from dashboard if available
+            if is_external_device and external_device_info:
+                deployed = external_device_info.get("deployed_version")
+                if deployed:
+                    installed = _parse_version(deployed)
             
             # Skip non-ESPHome firmware (e.g., manufacturer firmware like 1.4.2)
             if not _is_esphome_version(installed):
@@ -892,19 +1089,27 @@ def _get_esphome_update_entities(hass: HomeAssistant) -> list[dict[str, Any]]:
                 "name": name,
                 "current_version": installed,
                 "latest_version": builder_version if update_available else None,
-                "update_available": update_available,
+                "update_available": update_available and not is_dashboard_unavailable,
                 "in_progress": False,
                 "firmware_disabled": True,
-                "firmware_unavailable": False,
+                "firmware_unavailable": is_dashboard_unavailable,
                 "enabling": False,
                 "online": online,
                 "skipped": False,
+                "is_external": is_external_device,
+                "failed": entity_id in failed_devices,
             })
 
         elif state is None or state.state == "unavailable":
             is_enabling = state is None and online is not False
 
             installed = registry_version
+            
+            # For external devices, use deployed_version from dashboard if available
+            if is_external_device and external_device_info:
+                deployed = external_device_info.get("deployed_version")
+                if deployed:
+                    installed = _parse_version(deployed)
             
             # Skip non-ESPHome firmware (e.g., manufacturer firmware like 1.4.2)
             if not _is_esphome_version(installed):
@@ -913,19 +1118,30 @@ def _get_esphome_update_entities(hass: HomeAssistant) -> list[dict[str, Any]]:
             update_available = _is_update_available(installed, builder_version)
 
             is_fw_unavailable = state is not None and state.state == "unavailable" and not is_enabling
+            
+            # For external devices with unavailable state, check if dashboard has info
+            if is_external_device and is_fw_unavailable and external_device_info:
+                # Device is in external dashboard, so it's not truly unavailable
+                is_fw_unavailable = False
+            
+            # If external dashboard is unavailable, mark firmware as unavailable
+            if is_dashboard_unavailable:
+                is_fw_unavailable = True
 
             devices.append({
                 "entity_id": entity_id,
                 "name": name,
                 "current_version": installed,
                 "latest_version": builder_version if update_available else None,
-                "update_available": update_available,
+                "update_available": update_available and not is_dashboard_unavailable,
                 "in_progress": False,
                 "firmware_disabled": False,
                 "firmware_unavailable": is_fw_unavailable,
                 "enabling": False,
                 "online": online,
                 "skipped": False,
+                "is_external": is_external_device,
+                "failed": entity_id in failed_devices,
             })
 
         else:
@@ -933,90 +1149,194 @@ def _get_esphome_update_entities(hass: HomeAssistant) -> list[dict[str, Any]]:
                 state.attributes.get("installed_version")
             )
             installed = state_version or registry_version
+            
+            # For external devices, prefer deployed_version from dashboard
+            if is_external_device and external_device_info:
+                deployed = external_device_info.get("deployed_version")
+                if deployed:
+                    installed = _parse_version(deployed)
 
             # Skip non-ESPHome firmware (e.g., manufacturer firmware like 1.4.2)
             if not _is_esphome_version(installed):
                 continue
 
-            state_latest = _parse_version(
-                state.attributes.get("latest_version")
-            )
-            latest = state_latest or builder_version
+            # For external devices, use external builder version as latest
+            if is_external_device:
+                latest = builder_version
+            else:
+                state_latest = _parse_version(
+                    state.attributes.get("latest_version")
+                )
+                latest = state_latest or builder_version
 
-            ha_says_update = state.state == "on"
+            # Calculate update availability based on correct builder version
             actually_newer = _is_update_available(installed, latest)
             
+            # For external devices, ignore HA's state (it compares with wrong builder)
+            if is_external_device:
+                ha_says_update = actually_newer
+            else:
+                ha_says_update = state.state == "on"
+            
             # Check if update was skipped (HA says no update, but newer version exists)
-            is_skipped = not ha_says_update and actually_newer
+            is_skipped = not ha_says_update and actually_newer and not is_external_device
 
             devices.append({
                 "entity_id": entity_id,
                 "name": name,
                 "current_version": installed,
                 "latest_version": latest if (ha_says_update and actually_newer) or is_skipped else None,
-                "update_available": ha_says_update and actually_newer,
+                "update_available": ha_says_update and actually_newer and not is_dashboard_unavailable,
                 "in_progress": state.attributes.get("in_progress", False),
                 "firmware_disabled": False,
-                "firmware_unavailable": False,
+                "firmware_unavailable": is_dashboard_unavailable,
                 "enabling": False,
                 "online": online,
                 "skipped": is_skipped,
+                "is_external": is_external_device,
+                "failed": entity_id in failed_devices,
             })
 
-    # Handle devices without update entity in registry (edge case)
-    # Skip subdevices - they have no update entity at all
+    # ── Process ESPHome devices WITHOUT update entity ──────────────────
+    # These are typically external devices that don't have a firmware entity in HA
     for device in dev_reg.devices.values():
         if device.id not in esphome_device_ids:
             continue
-
+        
+        # Skip if already processed via update entity
         if device.id in devices_with_update_entity:
             continue
-
-        # Check if this device has ANY update entity in registry (enabled or disabled)
-        # If not, it's a subdevice without its own firmware - skip it
-        has_update_entity = any(
-            e.device_id == device.id for e in esphome_update_entities
-        )
-
-        if not has_update_entity:
-            continue
-
-        installed = _parse_version(device.sw_version)
         
-        # Skip non-ESPHome firmware (e.g., manufacturer firmware like 1.4.2)
+        # Mark as processed
+        processed_device_ids.add(device.id)
+        
+        name = device.name_by_user or device.name or "Unknown device"
+        normalized_name = _normalize_device_name(name)
+        
+        # Skip if already processed (by name)
+        if normalized_name in processed_external_devices:
+            continue
+        
+        processed_external_devices.add(normalized_name)
+        
+        installed = _parse_version(device.sw_version)
+        online = _is_device_online(hass, ent_reg, device.id)
+        
+        # Determine if this is an external device
+        is_external_device = False
+        builder_version = local_builder_version
+        is_dashboard_unavailable = False
+        external_device_info = None
+        
+        # Check 1: Can we match it to external dashboard?
+        if dashboard_mode == DASHBOARD_MODE_EXTERNAL and external_coordinator:
+            external_device_info = _match_device_to_external_dashboard(hass, name)
+            if external_device_info:
+                is_external_device = True
+                builder_version = external_builder_version
+                if not external_dashboard_available:
+                    is_dashboard_unavailable = True
+                deployed = external_device_info.get("deployed_version")
+                if deployed:
+                    installed = _parse_version(deployed)
+                # Remember this device as external
+                if normalized_name not in remembered_external_devices:
+                    remembered_external_devices[normalized_name] = True
+                    remembered_external_devices_changed = True
+        
+        # Check 2: Is it remembered as external from previous runs?
+        if not is_external_device and normalized_name in remembered_external_devices:
+            is_external_device = True
+            builder_version = external_builder_version
+            is_dashboard_unavailable = not external_dashboard_available
+        
+        # Check 3: No update entity in EXTERNAL dashboard mode = likely external
+        # (Devices without update entity that aren't remembered are assumed external in mixed mode)
+        if (
+            not is_external_device 
+            and dashboard_mode == DASHBOARD_MODE_EXTERNAL
+        ):
+            # Device has no update entity - in external mode, this likely means it's external
+            is_external_device = True
+            builder_version = external_builder_version
+            is_dashboard_unavailable = not external_dashboard_available
+            # Remember this device as external
+            if normalized_name not in remembered_external_devices:
+                remembered_external_devices[normalized_name] = True
+                remembered_external_devices_changed = True
+        
+        # Skip non-ESPHome firmware
         if not _is_esphome_version(installed):
             continue
         
-        update_available = _is_update_available(installed, builder_version)
-
-        online = _is_device_online(hass, ent_reg, device.id)
-        name = device.name_by_user or device.name or "Unknown device"
-
+        update_available = _is_update_available(installed, builder_version) if builder_version else False
+        
+        # Create unique identifier for external devices
+        external_entity_id = f"external:{normalized_name}"
+        
         devices.append({
-            "entity_id": None,
+            "entity_id": external_entity_id,
             "name": name,
             "current_version": installed,
             "latest_version": builder_version if update_available else None,
-            "update_available": update_available,
+            "update_available": update_available and not is_dashboard_unavailable,
             "in_progress": False,
-            "firmware_disabled": True,
-            "firmware_unavailable": False,
+            "firmware_disabled": False,
+            "firmware_unavailable": is_dashboard_unavailable,
             "enabling": False,
             "online": online,
             "skipped": False,
+            "is_external": is_external_device,
+            "failed": external_entity_id in failed_devices,
         })
+
+    # ── Cleanup: Remove remembered devices that no longer exist in HA ──────
+    # Get all current ESPHome device names (only from HA, not from external dashboard)
+    current_esphome_device_names: set[str] = set()
+    for device in dev_reg.devices.values():
+        if device.id in esphome_device_ids:
+            device_name = device.name_by_user or device.name
+            if device_name:
+                current_esphome_device_names.add(_normalize_device_name(device_name))
+    
+    # Remove remembered devices that no longer exist in HA
+    remembered_to_remove = [
+        name for name in remembered_external_devices
+        if name not in current_esphome_device_names
+    ]
+    for name in remembered_to_remove:
+        del remembered_external_devices[name]
+        remembered_external_devices_changed = True
+        _LOGGER.debug("Removed remembered external device '%s' (no longer exists in HA)", name)
+
+    # Save remembered external devices if changed
+    if remembered_external_devices_changed:
+        settings["external_devices"] = remembered_external_devices
+        hass.data[DOMAIN]["settings"] = settings
+        # Schedule async save
+        store: Store = hass.data[DOMAIN].get("store")
+        if store:
+            hass.async_create_task(store.async_save(settings))
 
     devices.sort(key=lambda d: (d["name"] or "").lower())
     return devices
 
-
-# ── WebSocket Commands ─────────────────────────────────────────────
+# ── WebSocket Commands ────────────────────────────────────────────
 
 @websocket_api.websocket_command({"type": "esphome_update_manager/devices"})
 @callback
 def ws_get_devices(hass, connection, msg):
     devices = _get_esphome_update_entities(hass)
-    connection.send_result(msg["id"], {"devices": devices})
+    
+    # Check if mixed setup (both local and external devices)
+    has_local = any(not d.get("is_external", False) for d in devices)
+    has_external = any(d.get("is_external", False) for d in devices)
+    is_mixed_setup = has_local and has_external
+    
+    connection.send_result(msg["id"], {
+        "devices": devices,
+        "is_mixed_setup": is_mixed_setup,
+    })
 
 
 @websocket_api.websocket_command(
@@ -1250,3 +1570,43 @@ async def ws_get_log_backup(hass, connection, msg):
         "filename": filename,
         "content": content,
     })
+
+@websocket_api.websocket_command({"type": "esphome_update_manager/subscribe_dashboard_status"})
+@websocket_api.async_response
+async def ws_subscribe_dashboard_status(hass, connection, msg):
+    """Subscribe to dashboard availability changes."""
+    
+    @callback
+    def handle_dashboard_changed(event):
+        """Handle dashboard availability change."""
+        connection.send_message(
+            websocket_api.event_message(
+                msg["id"],
+                {
+                    "available": event.data.get("available"),
+                    "url": event.data.get("url"),
+                },
+            )
+        )
+    
+    # Subscribe to the event
+    unsub = hass.bus.async_listen("esphome_update_manager_dashboard_changed", handle_dashboard_changed)
+    
+    # Store unsubscribe function for cleanup
+    connection.subscriptions[msg["id"]] = unsub
+    
+    # Send initial status
+    external_coordinator = hass.data[DOMAIN].get("external_dashboard")
+    connection.send_result(msg["id"])
+    
+    # Send current status immediately
+    if external_coordinator:
+        connection.send_message(
+            websocket_api.event_message(
+                msg["id"],
+                {
+                    "available": external_coordinator.available,
+                    "url": external_coordinator.url if hasattr(external_coordinator, 'url') else None,
+                },
+            )
+        )
