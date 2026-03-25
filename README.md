@@ -7,11 +7,13 @@ ESPHome device update manager for Home Assistant.
 
 A custom Home Assistant integration that provides a dedicated panel for managing firmware updates across all your ESPHome devices.
 
-> **Note:** This integration is intended for users who compile and flash ESPHome updates directly from Home Assistant using the ESPHome app (formerly known as add-on) or Device Builder.
+> **Note:**  Starting from version 1.4.0 the integration supports local and external esphome dashboard, previous versions only support local esphome builder HA app.
 
 ## Features
 
 - **Centralized dashboard** — View all ESPHome devices, their firmware versions, and online status in one place
+- **External dashboard support** — Connect to an ESPHome dashboard running on another machine (e.g., a separate build server)
+- **Mixed setup support** — Use both local ESPHome add-on and external dashboard simultaneously
 - **Batch updates** — Select multiple devices and update them sequentially with a single click
 - **Individual updates** — Update a single device directly from the panel
 - **Auto-update** — Automatically start updates when new firmware becomes available
@@ -30,7 +32,7 @@ A custom Home Assistant integration that provides a dedicated panel for managing
 
 - Home Assistant 2024.1 or newer
 - ESPHome integration configured with your devices
-- ESPHome Device Builder (Dashboard) app (add-on) installed and populated with your devices
+- ESPHome Device Builder (Dashboard) app (add-on) installed and populated with your devices, **or** an external ESPHome dashboard accessible via HTTP
 
 ## Recommendations
 
@@ -48,7 +50,8 @@ A custom Home Assistant integration that provides a dedicated panel for managing
 
    Or manual: Copy the `custom_components/esphome_update_manager` folder to your Home Assistant `config/custom_components/` directory and restart Home Assistant
 2. Add integration: Home Assistant → Settings → Devices & Services → Add Integration → search **ESPHome Update Manager** → submit
-3. A new **ESPHome Updates** panel appears in the sidebar
+3. Optionally configure an external ESPHome dashboard URL (see Configuration)
+4. A new **ESPHome Updates** panel appears in the sidebar
 
 
 ## Configuration
@@ -57,7 +60,32 @@ The integration can be configured via **Settings → Devices & Services → ESPH
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| Maximum number of log backups to keep | 5 | Number of previous update logs to retain (0 = disable backups) |
+| External Dashboard URL | *(empty)* | URL of an external ESPHome dashboard (e.g., `http://192.168.1.100:6052`). Leave empty or to use only the local ESPHome add-on. |
+| Maximum number of log backups to keep | 5 (default) | Number of previous update logs to retain (0 = disable backups) |
+
+### External Dashboard Setup
+
+If you run ESPHome on a separate machine (e.g., a dedicated build server), you can configure the integration to use that dashboard for compiling and uploading firmware:
+
+1. Go to **Settings → Devices & Services → ESPHome Update Manager → Configure**
+2. Enter the URL of your external ESPHome dashboard (e.g., `http://192.168.1.100:6052`)
+3. Click **Submit**
+4. To disconnect use http://
+
+The integration will automatically reload and connect to the external dashboard.
+
+**Requirements for external dashboard:**
+- The dashboard must be accessible from Home Assistant via HTTP
+- The devices must also exist in Home Assistant's ESPHome integration
+- Authentication is not yet supported — the dashboard must be accessible without login
+
+**Mixed setup:**
+When using an external dashboard, you can have devices managed by both the local ESPHome add-on and the external dashboard. In mixed setups, external devices are marked with `(ext)` after their name in the panel.
+
+**Dashboard offline handling:**
+- If the external dashboard becomes unreachable, affected devices show "Unavailable" status
+- The panel automatically updates within ~1 minute when the dashboard comes back online
+- Auto-update triggers automatically when the dashboard comes online with pending updates
 
 ## Usage
 
@@ -69,7 +97,7 @@ The panel shows all ESPHome devices with:
 |--------|-------------|
 | ☑️ Checkbox | Select devices for batch update |
 | 🟢🔴🟡 Status | Online, offline, or unknown |
-| Name | Device name |
+| Name | Device name (with `(ext)` suffix in mixed setups for external devices) |
 | Version | Current version → available version `or` Current version only if up-to-date|
 | Button | Action button (see below) |
 
@@ -84,7 +112,7 @@ The panel shows all ESPHome devices with:
 | **Enabling…** (orange + spinner) | Entity is being enabled, waiting for HA to pick it up |
 | **Updating…** (blue + spinner) | Update is in progress |
 | **Offline** (grey) | Device is not reachable |
-| **Unavailable** (light blue) | Firmware entity is unavailable |
+| **Unavailable** (light blue) | Firmware entity is unavailable (or external dashboard offline) |
 
 ### Batch updates
 
@@ -111,6 +139,7 @@ A checkbox enables automatic updates:
 - A device comes online and has a pending update
 - ESPHome is updated and devices now have newer firmware available
 - Home Assistant restarts and devices have pending updates
+- An external dashboard comes online and devices have pending updates
 
 ### Service: Start Updates
 
@@ -211,9 +240,15 @@ The integration handles various failure scenarios gracefully:
 | Device goes offline during update | ~2 minutes | Marked as failed, queue continues |
 | Device does not recover after OTA | ~2 minutes | Marked as failed, queue continues |
 | Update timeout | ~5 minutes | Marked as failed, queue continues |
+| External dashboard unreachable | Immediate | Marked as failed, queue continues |
 
 `A failed device never blocks the rest of the queue. Only an explicit cancel stops all remaining updates.`
 
+### Failed update
+- The device failed during a previous auto-update
+- Auto-update will skip this device until you manually update it successfully
+- Click the **Update** button to manually update the device or select multiple failed devices to update in sequence
+- After a successful update, the red indication is removed and auto-update resumes for this device
 
 ## Examples Panel
 
@@ -258,6 +293,16 @@ The integration handles various failure scenarios gracefully:
 - Check that your devices have the `binary_sensor.status` entity (see Recommendations)
 - Auto-update only triggers on state transitions (e.g., device coming online), not when already in "update available" state
 - Check Home Assistant logs for `esphome_update_manager` entries
+
+### External dashboard not connecting
+- Verify the URL is correct and accessible from Home Assistant (e.g., `http://192.168.1.100:6052`)
+- Check that the dashboard is running and not protected by authentication
+- Check Home Assistant logs for connection errors
+- The dashboard status updates every ~1 minute
+
+### External devices show "Unavailable"
+- The external dashboard may be offline — check the dashboard status
+- Devices will automatically become available when the dashboard reconnects
 
 ### Notification link does not open the log
 - Clear your browser cache and reload the panel
