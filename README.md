@@ -321,9 +321,16 @@ To move a device from one dashboard to another, follow these steps:
 - Check Home Assistant logs for connection errors
 - The dashboard status updates every ~1 minute
 
-### External devices show "Unavailable"
+### External dashboard devices show "Unavailable"
 - The external dashboard may be offline — check the dashboard status
 - Devices will automatically become available when the dashboard reconnects
+
+### Local dashboard devices show "Unavailable"
+- Local dashboard devices depend on the firmware entity created by HA (update.<your_device>_firmware)
+- A yaml per device must exist in the ESPHome builder app
+- This yaml must contain the OTA component
+- The device must be added to the ESPHome integration
+- When there still is no update entity, backup your yaml and delete it from the builder dashboard, delete the device from the esphome integration, restart HA and add yaml and device again.
 
 ### Notification link does not open the log
 - Clear your browser cache and reload the panel
