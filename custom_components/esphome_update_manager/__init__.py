@@ -28,6 +28,8 @@ from .const import (
     DEFAULT_MAX_LOG_BACKUPS,
     CONF_DASHBOARD_URL,
     CONF_DASHBOARD_MODE,
+    CONF_DASHBOARD_USERNAME,
+    CONF_DASHBOARD_PASSWORD,
     DASHBOARD_MODE_LOCAL,
     DASHBOARD_MODE_EXTERNAL,
 )
@@ -68,13 +70,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Setup dashboard coordinator based on mode
     dashboard_mode = entry.data.get(CONF_DASHBOARD_MODE, DASHBOARD_MODE_LOCAL)
     dashboard_url = entry.data.get(CONF_DASHBOARD_URL)
+    dashboard_username = entry.data.get(CONF_DASHBOARD_USERNAME)
+    dashboard_password = entry.data.get(CONF_DASHBOARD_PASSWORD)
 
     if dashboard_mode == DASHBOARD_MODE_EXTERNAL and dashboard_url:
         # External dashboard - create our own coordinator
-        external_coordinator = ExternalDashboardCoordinator(hass, dashboard_url)
+        external_coordinator = ExternalDashboardCoordinator(
+            hass, 
+            dashboard_url,
+            username=dashboard_username,
+            password=dashboard_password,
+        )
         hass.data[DOMAIN]["external_dashboard"] = external_coordinator
         hass.data[DOMAIN]["dashboard_mode"] = DASHBOARD_MODE_EXTERNAL
-        
+
         # Connect in background - don't block HA startup
         async def _connect_external_dashboard():
             try:
