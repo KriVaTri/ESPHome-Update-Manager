@@ -64,7 +64,7 @@ The integration can be configured via **Settings → Devices & Services → ESPH
 | External Dashboard URL | *(empty)* | URL of an external ESPHome dashboard (e.g., `http://192.168.1.100:6052`). Leave empty to use only the local ESPHome add-on. |
 | Username | *(empty)* | Username for dashboard authentication (optional) |
 | Password | *(empty)* | Password for dashboard authentication (optional) |
-| Maximum number of log backups to keep | 5 | Number of previous update logs to retain (0 = disable backups) |
+| Number of log backups to keep | 5 | Number of previous update logs to retain (0 = disable backups) |
 
 ### External Dashboard Setup
 
