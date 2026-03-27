@@ -13,6 +13,7 @@ A custom Home Assistant integration that provides a dedicated panel for managing
 
 - **Centralized dashboard** — View all ESPHome devices, their firmware versions, and status in one place
 - **External dashboard support** — Connect to an ESPHome dashboard running on another machine (e.g., a separate build server)
+- **Dashboard authentication** — Support for username/password authentication on external dashboards
 - **Mixed setup support** — Use both local ESPHome add-on and external dashboard simultaneously
 - **Batch updates** — Select multiple devices and update them sequentially with a single click
 - **Individual updates** — Update a single device directly from the panel
@@ -60,8 +61,10 @@ The integration can be configured via **Settings → Devices & Services → ESPH
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| External Dashboard URL | *(empty)* | URL of an external ESPHome dashboard (e.g., `http://192.168.1.100:6052`). Leave empty or to use only the local ESPHome add-on. |
-| Maximum number of log backups to keep | 5 (default) | Number of previous update logs to retain (0 = disable backups) |
+| External Dashboard URL | *(empty)* | URL of an external ESPHome dashboard (e.g., `http://192.168.1.100:6052`). Leave empty to use only the local ESPHome add-on. |
+| Username | *(empty)* | Username for dashboard authentication (optional) |
+| Password | *(empty)* | Password for dashboard authentication (optional) |
+| Maximum number of log backups to keep | 5 | Number of previous update logs to retain (0 = disable backups) |
 
 ### External Dashboard Setup
 
@@ -69,15 +72,23 @@ If you run ESPHome on a separate machine (e.g., a dedicated build server), you c
 
 1. Go to **Settings → Devices & Services → ESPHome Update Manager → Configure**
 2. Enter the URL of your external ESPHome dashboard (e.g., `http://192.168.1.100:6052`)
-3. Click **Submit**
-4. To disconnect use http://
+3. If your dashboard requires authentication, enter the username and password
+4. Click **Submit**
 
 The integration will automatically reload and connect to the external dashboard.
 
 **Requirements for external dashboard:**
 - The dashboard must be accessible from Home Assistant via HTTP
 - The devices must also exist in Home Assistant's ESPHome integration
-- Authentication is not yet supported — the dashboard must be accessible without login
+
+**Authentication:**
+- If your external dashboard is protected with basic authentication, enter the username and password in the configuration
+- The credentials are used for both HTTP requests and WebSocket connections (compile/upload)
+- When updating credentials in the options flow, leave the password field empty to keep the current password
+
+**To disconnect from an external dashboard:**
+- Clear the URL field or set it to `http://`
+- This will remove the external dashboard configuration and credentials
 
 **Mixed setup:**
 When using an external dashboard, you can have devices managed by both the local ESPHome add-on and the external dashboard. In mixed setups, external devices are marked with `(ext)` after their name in the panel.
@@ -241,6 +252,7 @@ The integration handles various failure scenarios gracefully:
 | Device does not recover after OTA | ~2 minutes | Marked as failed, queue continues |
 | Update timeout | ~5 minutes | Marked as failed, queue continues |
 | External dashboard unreachable | Immediate | Marked as failed, queue continues |
+| Authentication failed | Immediate | Marked as failed, queue continues |
 
 `A failed device never blocks the rest of the queue. Only an explicit cancel stops all remaining updates.`
 
@@ -317,12 +329,20 @@ To move a device from one dashboard to another, follow these steps:
 
 ### External dashboard not connecting
 - Verify the URL is correct and accessible from Home Assistant (e.g., `http://192.168.1.100:6052`)
-- Check that the dashboard is running and not protected by authentication
+- Check that the dashboard is running
+- If authentication is enabled on the dashboard, ensure you have entered the correct username and password
 - Check Home Assistant logs for connection errors
 - The dashboard status updates every ~1 minute
 
+### Authentication failed
+- Verify your username and password are correct
+- Check that basic authentication is enabled on your external dashboard
+- The integration uses HTTP Basic Authentication — other authentication methods are not supported
+- Check Home Assistant logs for `401` errors
+
 ### External dashboard devices show "Unavailable"
 - The external dashboard may be offline — check the dashboard status
+- Authentication may have failed — verify your credentials
 - Devices will automatically become available when the dashboard reconnects
 
 ### Local dashboard devices show "Unavailable"
