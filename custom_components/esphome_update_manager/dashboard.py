@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import logging
 import json
 from datetime import timedelta
@@ -21,7 +22,13 @@ REFRESH_INTERVAL = timedelta(minutes=1)
 class ExternalDashboardCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     """Coordinator to interact with an external ESPHome dashboard."""
 
-    def __init__(self, hass: HomeAssistant, url: str) -> None:
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        url: str,
+        username: str | None = None,
+        password: str | None = None,
+    ) -> None:
         """Initialize the dashboard coordinator."""
         super().__init__(
             hass,
@@ -32,6 +39,9 @@ class ExternalDashboardCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
         self.url = url.rstrip("/")
         self._session = async_get_clientsession(hass)
+        self._username = username
+        self._password = password
+        self._auth = aiohttp.BasicAuth(username, password) if username and password else None
         self._esphome_version: str | None = None
         self._available = False
         self._previous_available: bool | None = None
@@ -45,6 +55,21 @@ class ExternalDashboardCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def available(self) -> bool:
         """Return True if the dashboard is available."""
         return self._available
+
+    @property
+    def has_authentication(self) -> bool:
+        """Return True if authentication is configured."""
+        return self._auth is not None
+
+    def _get_ws_headers(self) -> dict[str, str]:
+        """Get headers for WebSocket connection including authentication."""
+        headers = {}
+        if self._username and self._password:
+            credentials = base64.b64encode(
+                f"{self._username}:{self._password}".encode()
+            ).decode()
+            headers["Authorization"] = f"Basic {credentials}"
+        return headers
 
     def _fire_availability_changed(self) -> None:
         """Fire event when dashboard availability changes."""
@@ -84,6 +109,7 @@ class ExternalDashboardCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             async with self._session.get(
                 f"{self.url}/version",
                 timeout=aiohttp.ClientTimeout(total=timeout),
+                auth=self._auth,
             ) as resp:
                 if resp.status == 200:
                     data = await resp.json()
@@ -91,9 +117,24 @@ class ExternalDashboardCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     self._available = True
                     self._fire_availability_changed()
                     return True
-                self._available = False
-                self._fire_availability_changed()
-                return False
+                elif resp.status == 401:
+                    _LOGGER.error(
+                        "Authentication failed for dashboard at %s. Check username and password.",
+                        self.url
+                    )
+                    self._available = False
+                    self._fire_availability_changed()
+                    return False
+                else:
+                    _LOGGER.debug("Dashboard returned status %s", resp.status)
+                    self._available = False
+                    self._fire_availability_changed()
+                    return False
+        except aiohttp.ClientConnectorError as err:
+            _LOGGER.debug("Dashboard connection failed: %s", err)
+            self._available = False
+            self._fire_availability_changed()
+            return False
         except Exception as err:
             _LOGGER.debug("Dashboard not reachable: %s", err)
             self._available = False
@@ -112,7 +153,10 @@ class ExternalDashboardCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             async with self._session.get(
                 f"{self.url}/devices",
                 timeout=aiohttp.ClientTimeout(total=30),
+                auth=self._auth,
             ) as resp:
+                if resp.status == 401:
+                    raise UpdateFailed("Authentication failed - check username and password")
                 if resp.status != 200:
                     raise UpdateFailed(f"Dashboard returned status {resp.status}")
                 data = await resp.json()
@@ -173,10 +217,14 @@ class ExternalDashboardCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         
         _LOGGER.info("Starting %s for %s via WebSocket: %s", command, configuration, ws_url)
         
+        # Get authentication headers for WebSocket
+        headers = self._get_ws_headers()
+        
         try:
             async with self._session.ws_connect(
                 ws_url,
                 timeout=aiohttp.ClientTimeout(total=timeout),
+                headers=headers,
             ) as ws:
                 # Send the command with the required "type" field
                 if command == "compile":
@@ -244,7 +292,16 @@ class ExternalDashboardCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         break
                 
                 return success
-                
+        
+        except aiohttp.WSServerHandshakeError as err:
+            if err.status == 401:
+                _LOGGER.error(
+                    "WebSocket authentication failed for %s. Check username and password.",
+                    command
+                )
+            else:
+                _LOGGER.error("WebSocket handshake failed for %s: %s", command, err)
+            return False
         except asyncio.TimeoutError:
             _LOGGER.error("%s timed out after %d seconds", command, timeout)
             return False
@@ -264,9 +321,13 @@ class ExternalDashboardCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             async with self._session.get(
                 f"{self.url}/ping",
                 timeout=aiohttp.ClientTimeout(total=10),
+                auth=self._auth,
             ) as resp:
                 if resp.status == 200:
                     return await resp.json()
+                elif resp.status == 401:
+                    _LOGGER.warning("Authentication failed when getting device status")
+                    return {}
                 return {}
         except Exception as err:
             _LOGGER.debug("Failed to get ping status: %s", err)
@@ -304,3 +365,16 @@ class ExternalDashboardCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def current_version(self) -> str | None:
         """Get the ESPHome version from the dashboard itself."""
         return self._esphome_version
+
+    def update_credentials(self, username: str | None, password: str | None) -> None:
+        """Update the authentication credentials.
+        
+        This can be used to update credentials without recreating the coordinator.
+        """
+        self._username = username
+        self._password = password
+        self._auth = aiohttp.BasicAuth(username, password) if username and password else None
+        _LOGGER.info(
+            "Dashboard credentials updated (auth %s)",
+            "enabled" if self._auth else "disabled"
+        )
