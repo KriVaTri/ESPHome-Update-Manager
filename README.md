@@ -36,7 +36,7 @@ A custom Home Assistant integration that provides a dedicated panel for managing
 
 ## Recommendations
 
-- Add the following binary_sensor to your device yaml file for improved integration performance and functionality:
+- Add the following binary_sensor to your device yaml file for improved integration performance and functionality (online status):
   
   ```yaml
   binary_sensor:
