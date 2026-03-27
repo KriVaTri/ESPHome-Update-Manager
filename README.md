@@ -11,7 +11,7 @@ A custom Home Assistant integration that provides a dedicated panel for managing
 
 ## Features
 
-- **Centralized dashboard** — View all ESPHome devices, their firmware versions, and online status in one place
+- **Centralized dashboard** — View all ESPHome devices, their firmware versions, and status in one place
 - **External dashboard support** — Connect to an ESPHome dashboard running on another machine (e.g., a separate build server)
 - **Mixed setup support** — Use both local ESPHome add-on and external dashboard simultaneously
 - **Batch updates** — Select multiple devices and update them sequentially with a single click
