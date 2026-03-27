@@ -1406,6 +1406,37 @@ if (!customElements.get("esphome-update-panel")) {
   customElements.define("esphome-update-panel", ESPHomeUpdatePanel);
 }
 
+// ── Console version log ─────────────────────────────────────────
+
+(function() {
+  // Extract version from script URL (?v=x.x.x)
+  const scripts = document.querySelectorAll('script[src*="esphome-update-panel"]');
+  let version = "unknown";
+  
+  for (const script of scripts) {
+    const match = script.src.match(/[?&]v=([^&]+)/);
+    if (match) {
+      version = match[1];
+      break;
+    }
+  }
+  
+  // Also check module imports
+  if (version === "unknown") {
+    const currentScript = document.currentScript;
+    if (currentScript?.src) {
+      const match = currentScript.src.match(/[?&]v=([^&]+)/);
+      if (match) version = match[1];
+    }
+  }
+  
+  console.info(
+    `%c  ESPHOME-UPDATE-MANAGER  %c  v${version}  `,
+    "color: #fff; background: #039be5; font-weight: bold; padding: 2px 0;",
+    "color: #039be5; background: #fff; font-weight: bold; padding: 2px 0;"
+  );
+})();
+
 // ── Auto reload ─────────────────────────────────────────────────
 
 (function() {
