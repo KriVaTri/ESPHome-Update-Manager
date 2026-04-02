@@ -5,7 +5,7 @@ import {
 } from "https://unpkg.com/lit-element@2.4.0/lit-element.js?module";
 
 const ENABLING_TIMEOUT_MS = 90000;
-const UPDATING_TIMEOUT_MS = 600000;
+const UPDATING_TIMEOUT_MS = 1200000;
 
 class ESPHomeUpdatePanel extends LitElement {
   static get properties() {
@@ -409,15 +409,14 @@ class ESPHomeUpdatePanel extends LitElement {
     return this._updatingIds.has(entityId);
   }
 
-  _expireUpdating(entityId) {
+_expireUpdating(entityId) {
     const info = this._updatingIds.get(entityId);
     if (info?.timeoutId) clearTimeout(info.timeoutId);
     this._updatingIds.delete(entityId);
     this._updatingIds = new Map(this._updatingIds);
     this._addLocalResult(entityId, "failed", "Update timed out — device may be unresponsive");
-    this._cancelUpdates();
     this._loadDevices();
-  }
+}
 
   _clearAllUpdatingTimers() {
     for (const [, info] of this._updatingIds) {
@@ -1406,7 +1405,7 @@ if (!customElements.get("esphome-update-panel")) {
   customElements.define("esphome-update-panel", ESPHomeUpdatePanel);
 }
 
-// ── Console version log ─────────────────────────────────────────
+// ── Console version log ─────────────────────────────────────────────────
 
 (function() {
   // Extract version from script URL (?v=x.x.x)
