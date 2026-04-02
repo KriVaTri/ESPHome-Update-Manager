@@ -275,14 +275,23 @@ async def _write_update_log(hass: HomeAssistant, results: list[dict]) -> None:
     """Write update results to log file."""
     log_path = _get_log_path(hass)
     
+    manifest_path = Path(__file__).parent / "manifest.json"
+    
     def _write_log():
         log_path.parent.mkdir(parents=True, exist_ok=True)
         
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         
+        try:
+            with open(manifest_path) as f:
+                manifest = json.load(f)
+            version = manifest.get("version", "unknown")
+        except Exception:
+            version = "unknown"
+        
         lines = []
         lines.append("=" * 60)
-        lines.append("ESPHome Update Manager - Update Log")
+        lines.append(f"ESPHome Update Manager v{version} - Update Log")
         lines.append(f"Timestamp: {timestamp}")
         lines.append("=" * 60)
         lines.append("")
