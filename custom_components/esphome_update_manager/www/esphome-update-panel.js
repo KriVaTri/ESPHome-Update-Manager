@@ -11,6 +11,7 @@ class ESPHomeUpdatePanel extends LitElement {
   static get properties() {
     return {
       hass: { type: Object },
+      narrow: { type: Boolean },
       devices: { type: Array },
       selected: { type: Object },
       results: { type: Array },
@@ -38,6 +39,7 @@ class ESPHomeUpdatePanel extends LitElement {
   constructor() {
     super();
     this.devices = [];
+    this.narrow = false;
     this.selected = new Set();
     this.results = [];
     this.running = false;
@@ -222,6 +224,17 @@ class ESPHomeUpdatePanel extends LitElement {
       this._loadDevices();
       this._loadAddonInfo();
     }, 2000);
+  }
+
+  // ── Sidebar Toggle ──────────────────────────────────────────────
+
+  _toggleSidebar() {
+    this.dispatchEvent(
+      new CustomEvent("hass-toggle-menu", {
+        bubbles: true,
+        composed: true,
+      })
+    );
   }
 
   // ── Menu ────────────────────────────────────────────────────────
@@ -876,6 +889,44 @@ _expireUpdating(entityId) {
         padding: 0;
         font-family: var(--paper-font-body1_-_font-family, "Roboto", sans-serif);
       }
+      /* App toolbar (HA style) */
+      .app-toolbar {
+        display: flex;
+        align-items: center;
+        height: 56px;
+        padding: 0 16px;
+        background: var(--app-header-background-color, var(--primary-color, #03a9f4));
+        color: var(--app-header-text-color, #fff);
+        font-size: 20px;
+        font-weight: 400;
+      }
+      .app-toolbar .title {
+        margin-left: 16px;
+        flex: 1;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .sidebar-toggle {
+        background: none;
+        border: none;
+        cursor: pointer;
+        padding: 8px;
+        margin: 0;
+        color: inherit;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 50%;
+      }
+      .sidebar-toggle:hover {
+        background: rgba(255, 255, 255, 0.1);
+      }
+      .sidebar-toggle svg {
+        width: 24px;
+        height: 24px;
+        fill: currentColor;
+      }
       h1 { 
         margin: 0 0 16px; 
         padding: 8px 16px;
@@ -1207,6 +1258,17 @@ _expireUpdating(entityId) {
       ` : ""}
 
       ${this._showLogPopup ? this._renderLogPopup() : ""}
+
+      ${this.narrow ? html`
+        <div class="app-toolbar">
+          <button class="sidebar-toggle" @click=${this._toggleSidebar} title="Open sidebar">
+            <svg viewBox="0 0 24 24">
+              <path d="M3,6H21V8H3V6M3,11H21V13H3V11M3,16H21V18H3V16Z" />
+            </svg>
+          </button>
+          <span class="title">ESPHome Update Manager</span>
+        </div>
+      ` : ""}
       
       <h1>
         <img src="/local/esphome-update-manager/logo.png"
