@@ -883,6 +883,22 @@ def _is_esphome_version(version: str | None) -> bool:
     return False
 
 
+def _extract_esphome_version(version: str | None) -> str | None:
+    """Extract ESPHome version (YYYY.M.x format) from a version string.
+    
+    Examples:
+        "2026.3.3" -> "2026.3.3"
+        "1.0.5 (ESPHome 2026.3.3)" -> "2026.3.3"
+        "1.0.5" -> None
+    """
+    if not version:
+        return None
+    match = re.search(r"(20\d{2}\.\d+\.\d+)", version)
+    if match:
+        return match.group(1)
+    return None
+
+
 def _get_local_esphome_builder_version(hass: HomeAssistant) -> str | None:
     """Get the ESPHome version from the local HA add-on."""
     state = hass.states.get(BUILDER_ENTITY_ID)
@@ -978,6 +994,19 @@ def _get_device_sw_version(
     return None
 
 
+def _get_device_sw_version_raw(
+    dev_reg: dr.DeviceRegistry,
+    device_id: str | None,
+) -> str | None:
+    """Get raw sw_version without parsing (for ESPHome version detection)."""
+    if not device_id:
+        return None
+    device = dev_reg.async_get(device_id)
+    if device:
+        return device.sw_version
+    return None
+
+
 def _find_ha_device_by_name(hass: HomeAssistant, name: str) -> dr.DeviceEntry | None:
     """Find a HA device by name (for external devices that exist in HA but have no update entity)."""
     dev_reg = dr.async_get(hass)
@@ -997,16 +1026,11 @@ def _find_ha_device_by_name(hass: HomeAssistant, name: str) -> dr.DeviceEntry | 
 
 
 def _get_esphome_update_entities(hass: HomeAssistant) -> list[dict[str, Any]]:
-    """Get all ESPHome update entities with their status.
-    
-    This function handles both local and external dashboard devices:
-    - Local devices: compared against local ESPHome add-on version
-    - External devices: compared against external dashboard version
-    
-    Only devices that exist in the ESPHome integration are shown.
-    """
+    """Get all ESPHome update entities with their status."""
     ent_reg = er.async_get(hass)
     dev_reg = dr.async_get(hass)
+    
+    esphome_device_ids = _get_esphome_device_ids(hass)
     
     # Get versions from both sources
     local_builder_version = _get_local_esphome_builder_version(hass)
@@ -1058,6 +1082,7 @@ def _get_esphome_update_entities(hass: HomeAssistant) -> list[dict[str, Any]]:
 
         name = entity_id
         registry_version = _get_device_sw_version(dev_reg, device_id)
+        registry_version_raw = _get_device_sw_version_raw(dev_reg, device_id)
         if device_id:
             device = dev_reg.async_get(device_id)
             if device:
@@ -1091,7 +1116,9 @@ def _get_esphome_update_entities(hass: HomeAssistant) -> list[dict[str, Any]]:
                     remembered_external_devices_changed = True
 
         if is_disabled:
-            installed = registry_version
+            # For offline devices, extract ESPHome version from raw string for comparison
+            # "1.0.5 (ESPHome 2026.3.3)" -> use "2026.3.3" for comparison
+            installed = _extract_esphome_version(registry_version_raw) or registry_version
             
             # For external devices, use deployed_version from dashboard if available
             if is_external_device and external_device_info:
@@ -1099,8 +1126,8 @@ def _get_esphome_update_entities(hass: HomeAssistant) -> list[dict[str, Any]]:
                 if deployed:
                     installed = _parse_version(deployed)
             
-            # Skip non-ESPHome firmware (e.g., manufacturer firmware like 1.4.2)
-            if not _is_esphome_version(installed):
+            # Skip non-ESPHome firmware - check raw version (contains full string like "1.0.5 (ESPHome 2026.3.3)")
+            if not _is_esphome_version(registry_version_raw):
                 continue
             
             update_available = _is_update_available(installed, builder_version)
@@ -1124,7 +1151,9 @@ def _get_esphome_update_entities(hass: HomeAssistant) -> list[dict[str, Any]]:
         elif state is None or state.state == "unavailable":
             is_enabling = state is None and online is not False
 
-            installed = registry_version
+            # For offline devices, extract ESPHome version from raw string for comparison
+            # "1.0.5 (ESPHome 2026.3.3)" -> use "2026.3.3" for comparison
+            installed = _extract_esphome_version(registry_version_raw) or registry_version
             
             # For external devices, use deployed_version from dashboard if available
             if is_external_device and external_device_info:
@@ -1132,8 +1161,8 @@ def _get_esphome_update_entities(hass: HomeAssistant) -> list[dict[str, Any]]:
                 if deployed:
                     installed = _parse_version(deployed)
             
-            # Skip non-ESPHome firmware (e.g., manufacturer firmware like 1.4.2)
-            if not _is_esphome_version(installed):
+            # Skip non-ESPHome firmware - check raw version (contains full string like "1.0.5 (ESPHome 2026.3.3)")
+            if not _is_esphome_version(registry_version_raw):
                 continue
             
             update_available = _is_update_available(installed, builder_version)
@@ -1177,8 +1206,8 @@ def _get_esphome_update_entities(hass: HomeAssistant) -> list[dict[str, Any]]:
                 if deployed:
                     installed = _parse_version(deployed)
 
-            # Skip non-ESPHome firmware (e.g., manufacturer firmware like 1.4.2)
-            if not _is_esphome_version(installed):
+            # Skip non-ESPHome firmware - check raw version or state attributes
+            if not _is_esphome_version(registry_version_raw) and not _is_esphome_version(state.attributes.get("installed_version")):
                 continue
 
             # For external devices, use external builder version as latest
@@ -1217,6 +1246,125 @@ def _get_esphome_update_entities(hass: HomeAssistant) -> list[dict[str, Any]]:
                 "is_external": is_external_device,
                 "failed": entity_id in failed_devices,
             })
+
+    # ── Process ESPHome devices WITHOUT update entity ──────────────────
+    # These are devices in ESPHome integration but without firmware entity
+    for device in dev_reg.devices.values():
+        if device.id not in esphome_device_ids:
+            continue
+        
+        # Skip if already processed via update entity
+        if device.id in devices_with_update_entity:
+            continue
+        
+        # Skip sub-devices (they have a via_device_id pointing to parent)
+        if device.via_device_id is not None:
+            continue
+
+        # Mark as processed
+        processed_device_ids.add(device.id)
+        
+        name = device.name_by_user or device.name or "Unknown device"
+        normalized_name = _normalize_device_name(name)
+        
+        # Skip if already processed (by name)
+        if normalized_name in processed_external_devices:
+            continue
+        
+        processed_external_devices.add(normalized_name)
+        
+        installed = _parse_version(device.sw_version)
+        online = _is_device_online(hass, ent_reg, device.id)
+        
+        # Skip non-ESPHome firmware - check raw sw_version
+        if not _is_esphome_version(device.sw_version):
+            continue
+        
+        # Determine if this is an external device and if it can be updated
+        is_external_device = False
+        builder_version = None
+        is_unavailable = True  # Default: unavailable until we find a dashboard
+        external_device_info = None
+        
+        # Check if we can match to external dashboard
+        if dashboard_mode == DASHBOARD_MODE_EXTERNAL and external_coordinator:
+            external_device_info = _match_device_to_external_dashboard(hass, name)
+            if external_device_info:
+                is_external_device = True
+                builder_version = external_builder_version
+                is_unavailable = not external_dashboard_available
+                deployed = external_device_info.get("deployed_version")
+                if deployed:
+                    installed = _parse_version(deployed)
+                # Remember this device as external
+                if normalized_name not in remembered_external_devices:
+                    remembered_external_devices[normalized_name] = True
+                    remembered_external_devices_changed = True
+            elif normalized_name in remembered_external_devices:
+                # Remembered as external but dashboard offline or device not found
+                is_external_device = True
+                builder_version = external_builder_version
+                is_unavailable = True
+        
+        # In LOCAL mode, devices without update entity are always unavailable
+        # (they're not in the local ESPHome add-on)
+        
+        update_available = False
+        if builder_version and not is_unavailable:
+            update_available = _is_update_available(installed, builder_version)
+        
+        # Create unique identifier
+        if is_external_device:
+            device_entity_id = f"external:{normalized_name}"
+        else:
+            device_entity_id = f"device:{normalized_name}"
+        
+        devices.append({
+            "entity_id": device_entity_id,
+            "name": name,
+            "current_version": installed,
+            "latest_version": builder_version if update_available else None,
+            "update_available": update_available,
+            "in_progress": False,
+            "firmware_disabled": False,
+            "firmware_unavailable": is_unavailable,
+            "enabling": False,
+            "online": online,
+            "skipped": False,
+            "is_external": is_external_device,
+            "failed": device_entity_id in failed_devices,
+        })
+
+    # ── Cleanup: Remove remembered devices that no longer exist in HA ──────
+    # Get all current ESPHome device names (only from HA, not from external dashboard)
+    current_esphome_device_names: set[str] = set()
+    for device in dev_reg.devices.values():
+        if device.id in esphome_device_ids:
+            device_name = device.name_by_user or device.name
+            if device_name:
+                current_esphome_device_names.add(_normalize_device_name(device_name))
+    
+    # Remove remembered devices that no longer exist in HA
+    remembered_to_remove = [
+        name for name in remembered_external_devices
+        if name not in current_esphome_device_names
+    ]
+    for name in remembered_to_remove:
+        del remembered_external_devices[name]
+        remembered_external_devices_changed = True
+        _LOGGER.debug("Removed remembered external device '%s' (no longer exists in HA)", name)
+
+    # Save remembered external devices if changed
+    if remembered_external_devices_changed:
+        settings["external_devices"] = remembered_external_devices
+        hass.data[DOMAIN]["settings"] = settings
+        # Schedule async save
+        store: Store = hass.data[DOMAIN].get("store")
+        if store:
+            hass.async_create_task(store.async_save(settings))
+
+    devices.sort(key=lambda d: (d["name"] or "").lower())
+    return devices
 
     # ── Process ESPHome devices WITHOUT update entity ──────────────────
     # These are devices in ESPHome integration but without firmware entity
@@ -1376,7 +1524,7 @@ def ws_start_updates(hass, connection, msg):
 @websocket_api.websocket_command({"type": "esphome_update_manager/cancel"})
 @callback
 def ws_cancel_updates(hass, connection, msg):
-    _LOGGER.warning("WebSocket: cancel updates requested")
+    _LOGGER.debug("WebSocket: cancel updates requested")
     queue: UpdateQueue = hass.data[DOMAIN]["queue"]
     queue.cancel()
     connection.send_result(msg["id"], {"cancelled": True})
@@ -1392,6 +1540,8 @@ def ws_get_status(hass, connection, msg):
             "running": queue.is_running,
             "results": queue.results,
             "summary": queue.summary,
+            "phase": queue.phase,
+            "addon_name": queue.addon_name,
         },
     )
 
