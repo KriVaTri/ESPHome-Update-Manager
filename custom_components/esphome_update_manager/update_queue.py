@@ -31,6 +31,12 @@ INITIAL_PROGRESS_TIMEOUT = 60  # 1 minute
 # Normal OTA reboot takes ~30s, give generous margin
 MAX_UNAVAILABLE_DURATION = 120  # 2 minutes
 
+# Queue phases
+PHASE_IDLE = "idle"
+PHASE_STOPPING_ADDON = "stopping_addon"
+PHASE_UPDATING = "updating"
+PHASE_STARTING_ADDON = "starting_addon"
+
 
 class DeviceUpdateResult:
     """Result of a single device update."""
@@ -57,10 +63,22 @@ class UpdateQueue:
         self._task: asyncio.Task | None = None
         self._stop_addon_slug: str | None = None
         self._addon_was_running = False
+        self._phase: str = PHASE_IDLE
+        self._addon_name: str | None = None
 
     @property
     def is_running(self) -> bool:
         return self._running
+
+    @property
+    def phase(self) -> str:
+        """Return the current phase of the update queue."""
+        return self._phase
+
+    @property
+    def addon_name(self) -> str | None:
+        """Return the name of the addon being stopped/started."""
+        return self._addon_name
 
     @property
     def results(self) -> list[dict[str, Any]]:
@@ -106,10 +124,12 @@ class UpdateQueue:
         self._current_index = 0
         self._stop_addon_slug = stop_addon_slug
         self._addon_was_running = False
+        self._phase = PHASE_IDLE
+        self._addon_name = None
         self._task = self.hass.async_create_task(self._run())
 
     def cancel(self) -> None:
-        _LOGGER.warning("Cancel requested - setting _cancelled = True (was: %s)", self._cancelled)
+        _LOGGER.debug("Cancel requested - setting _cancelled = True (was: %s)", self._cancelled)
         # Log stack trace to see where cancel was called from
         _LOGGER.debug("Cancel call stack:\n%s", "".join(traceback.format_stack()))
         
@@ -124,6 +144,16 @@ class UpdateQueue:
             raise RuntimeError("Cannot clear while updates are running")
         self._queue.clear()
 
+    def _fire_phase_changed(self) -> None:
+        """Fire event when phase changes."""
+        self.hass.bus.async_fire(
+            "esphome_update_manager_phase_changed",
+            {
+                "phase": self._phase,
+                "addon_name": self._addon_name,
+            },
+        )
+
     async def _stop_addon(self) -> None:
         """Stop add-on before updates if requested."""
         if not self._stop_addon_slug:
@@ -134,15 +164,17 @@ class UpdateQueue:
         info = await async_get_addon_info(self.hass, self._stop_addon_slug)
         if info and info.get("state") == "started":
             self._addon_was_running = True
-            addon_name = info.get("name", self._stop_addon_slug)
-            _LOGGER.info("Stopping add-on %s before updates", addon_name)
+            self._addon_name = info.get("name", self._stop_addon_slug)
+            self._phase = PHASE_STOPPING_ADDON
+            self._fire_phase_changed()
+            _LOGGER.info("Stopping add-on %s before updates", self._addon_name)
             success = await async_stop_addon(self.hass, self._stop_addon_slug)
             if success:
-                _LOGGER.info("Add-on %s stopped successfully", addon_name)
+                _LOGGER.info("Add-on %s stopped successfully", self._addon_name)
                 # Give it a moment to free memory
                 await asyncio.sleep(5)
             else:
-                _LOGGER.warning("Failed to stop add-on %s", addon_name)
+                _LOGGER.warning("Failed to stop add-on %s", self._addon_name)
                 self._addon_was_running = False
 
     async def _restart_addon(self) -> None:
@@ -153,20 +185,35 @@ class UpdateQueue:
         from . import async_start_addon, async_get_addon_info
 
         info = await async_get_addon_info(self.hass, self._stop_addon_slug)
-        addon_name = info.get("name", self._stop_addon_slug) if info else self._stop_addon_slug
+        self._addon_name = info.get("name", self._stop_addon_slug) if info else self._stop_addon_slug
 
-        _LOGGER.info("Restarting add-on %s after updates", addon_name)
+        self._phase = PHASE_STARTING_ADDON
+        self._fire_phase_changed()
+        _LOGGER.info("Restarting add-on %s after updates", self._addon_name)
         success = await async_start_addon(self.hass, self._stop_addon_slug)
+        
         if success:
-            _LOGGER.info("Add-on %s restarted successfully", addon_name)
+            # Wait for addon to actually be running (max 60 seconds)
+            for _ in range(30):
+                await asyncio.sleep(2)
+                info = await async_get_addon_info(self.hass, self._stop_addon_slug)
+                if info and info.get("state") == "started":
+                    _LOGGER.info("Add-on %s is now running", self._addon_name)
+                    break
+            else:
+                _LOGGER.warning("Add-on %s did not start within timeout", self._addon_name)
         else:
-            _LOGGER.warning("Failed to restart add-on %s", addon_name)
+            _LOGGER.warning("Failed to restart add-on %s", self._addon_name)
 
     async def _run(self) -> None:
         _LOGGER.debug("Update queue _run() started")
         try:
             # Stop add-on if requested
             await self._stop_addon()
+
+            # Set phase to updating
+            self._phase = PHASE_UPDATING
+            self._fire_phase_changed()
 
             for i, item in enumerate(self._queue):
                 self._current_index = i
@@ -200,7 +247,7 @@ class UpdateQueue:
                         pass
 
         except asyncio.CancelledError:
-            _LOGGER.warning("Update queue task was cancelled via CancelledError")
+            _LOGGER.debug("Update queue task was cancelled via CancelledError")
             for item in self._queue:
                 if item.status == STATUS_QUEUED:
                     _LOGGER.debug("Marking queued item %s as cancelled", item.entity_id)
@@ -218,6 +265,8 @@ class UpdateQueue:
             except Exception as err:
                 _LOGGER.error("Failed to restart add-on: %s", err)
 
+            self._phase = PHASE_IDLE
+            self._fire_phase_changed()
             self._running = False
             _LOGGER.info("Update queue finished. Summary: %s", self.summary)
             self.hass.bus.async_fire(
@@ -323,7 +372,7 @@ class UpdateQueue:
                     item.error = error_reason or "Update failed"
 
         except asyncio.CancelledError:
-            _LOGGER.warning("_update_single for %s caught CancelledError", item.entity_id)
+            _LOGGER.debug("_update_single for %s caught CancelledError", item.entity_id)
             item.status = STATUS_CANCELLED
             item.error = "Cancelled by user"
             raise
