@@ -33,6 +33,8 @@ class ESPHomeUpdatePanel extends LitElement {
       _logBackups: { type: Array },
       _isMixedSetup: { type: Boolean },
       _dashboardAvailable: { type: Boolean },
+      _phase: { type: String },
+      _addonName: { type: String },
     };
   }
 
@@ -69,6 +71,8 @@ class ESPHomeUpdatePanel extends LitElement {
     this._dashboardAvailable = null;
     this._dashboardSubscription = null;
     this._loadPendingFromStorage();
+    this._phase = "idle";
+    this._addonName = null;
   }
 
   connectedCallback() {
@@ -602,6 +606,8 @@ _expireUpdating(entityId) {
       
       this.running = res.running;
       this.results = res.results || [];
+      this._phase = res.phase || "idle";
+      this._addonName = res.addon_name || null;
 
       if (this._updatingIds.size > 0) {
         const activeIds = new Set(
@@ -634,6 +640,8 @@ _expireUpdating(entityId) {
         this._pollInterval = null;
         this._clearAllUpdatingTimers();
         this._cancelling = false;
+        this._phase = "idle";
+        this._addonName = null;
         this.selected.clear();
         await this._loadDevices();
         await this._loadAddonInfo();
@@ -642,7 +650,7 @@ _expireUpdating(entityId) {
     } catch (e) {
       console.error("_pollStatus error:", e);
     }
-  }
+}
 
   // ── Actions ─────────────────────────────────────────────────────
 
@@ -823,6 +831,45 @@ _expireUpdating(entityId) {
     if (online === true) return "🟢";
     if (online === false) return "🔴";
     return "🟡";
+  }
+
+  _getStatusText() {
+    if (this._cancelling) {
+      return "Cancelling…";
+    }
+    
+    switch (this._phase) {
+      case "stopping_addon":
+        return `Stopping ${this._addonName || "add-on"}…`;
+      case "starting_addon":
+        return `Starting ${this._addonName || "add-on"}…`;
+      case "updating":
+        return "Updating…";
+      default:
+        return "Updating…";
+    }
+  }
+
+  _getAddonStatusDisplay() {
+    // During update phases, show the transitional states
+    if (this.running && this._stopAddonDuringUpdate) {
+      if (this._phase === "stopping_addon") {
+        return { text: "● Stopping", cls: "addon-stopping" };
+      }
+      if (this._phase === "starting_addon") {
+        return { text: "● Starting", cls: "addon-starting" };
+      }
+      // During updating phase, addon is stopped (if it was running)
+      if (this._phase === "updating" && this._addonName) {
+        return { text: "● Stopped", cls: "addon-stopped" };
+      }
+    }
+    
+    // Default: show actual running state
+    if (this._addonInfo?.running) {
+      return { text: "● Running", cls: "addon-running" };
+    }
+    return { text: "● Stopped", cls: "addon-stopped" };
   }
 
   _getDeviceButton(d) {
@@ -1107,6 +1154,8 @@ _expireUpdating(entityId) {
       .addon-option .addon-status { margin-left: auto; font-size: 0.85em; }
       .addon-running { color: #4caf50; margin-right: 10px; }
       .addon-stopped { color: #f44336; margin-right: 10px; }
+      .addon-stopping { color: #ff9800; margin-right: 10px; }
+      .addon-starting { color: #ff9800; margin-right: 10px; }
 
       .results { margin-top: 24px; }
       .results-header {
@@ -1291,15 +1340,13 @@ _expireUpdating(entityId) {
           <div class="addon-option">
             <input type="checkbox"
               .checked=${this._stopAddonDuringUpdate}
+              ?disabled=${this.running}
               @change=${(e) => {
                 this._stopAddonDuringUpdate = e.target.checked;
                 this._saveAutoUpdateSettings();
               }} />
             <span>Stop <span class="addon-name">${this._addonInfo.name}</span> during updates to free memory</span>
-            ${this._addonInfo.running
-              ? html`<span class="addon-status addon-running">● Running</span>`
-              : html`<span class="addon-status addon-stopped">● Stopped</span>`
-            }
+            <span class="addon-status ${this._getAddonStatusDisplay().cls}">${this._getAddonStatusDisplay().text}</span>
           </div>
         ` : ""}
 
@@ -1326,7 +1373,7 @@ _expireUpdating(entityId) {
                 ${this._cancelling ? html`<span class="spinner"></span>` : ""}
                 ${this._cancelling ? "Cancelling…" : "⏹ Cancel"}
               </button>
-              <span class="toolbar-info">${this._cancelling ? "Cancelling…" : "Updating…"}</span>
+              <span class="toolbar-info">${this._getStatusText()}</span>
             ` : html`
               <button class="btn-select-all" @click=${this._selectAll}>
                 ${this.selected.size === selectableCount ? "Deselect all" : "Select all"}
