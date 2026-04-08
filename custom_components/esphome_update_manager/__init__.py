@@ -848,12 +848,25 @@ async def async_start_addon(hass: HomeAssistant, slug: str) -> bool:
 # ── Version / device helpers ──────────────────────────────────────
 
 def _parse_version(version_string: str | None) -> str | None:
+    """Extract ESPHome version from a version string."""
     if not version_string:
         return None
-    match = re.match(r"(\d+\.\d+\.\d+)", version_string.strip())
+    
+    version_string = version_string.strip()
+    
+    # Check for project version format: "X.XX (ESPHome YYYY.MM.N)"
+    # Extract ESPHome version from inside parentheses
+    if "(ESPHome" in version_string:
+        match = re.search(r"\(ESPHome\s+(20\d{2}\.\d+\.\d+)", version_string)
+        if match:
+            return match.group(1)
+    
+    # Standard ESPHome version: 20XX.X.X
+    match = re.match(r"(20\d{2}\.\d+\.\d+)", version_string)
     if match:
         return match.group(1)
-    return version_string.strip()
+    
+    return None
 
 
 def _version_tuple(version: str | None) -> tuple[int, ...] | None:
@@ -932,21 +945,54 @@ def _get_external_dashboard_version(hass: HomeAssistant) -> str | None:
 
 
 def _normalize_device_name(name: str) -> str:
-    """Normalize device name for matching (ESPHome style: lowercase, spaces/underscores to dashes)."""
-    return name.lower().replace(" ", "-").replace("_", "-")
+    """Normalize device name for matching (ESPHome style: lowercase, only a-z, 0-9, - allowed)."""
+    normalized = name.lower()
+    # Replace spaces and underscores with dashes
+    normalized = normalized.replace(" ", "-").replace("_", "-")
+    # Remove characters not allowed in ESPHome names
+    normalized = re.sub(r'[^a-z0-9-]', '', normalized)
+    # Reduce multiple dashes to single dash
+    normalized = re.sub(r'-+', '-', normalized)
+    # Remove leading/trailing dashes
+    normalized = normalized.strip('-')
+    return normalized
 
 
 def _match_device_to_external_dashboard(
     hass: HomeAssistant,
     device_name: str,
+    entity_id: str | None = None,
+    original_name: str | None = None,
 ) -> dict | None:
-    """Match a HA device to an external dashboard device. Returns device info if found."""
-    coordinator: ExternalDashboardCoordinator | None = hass.data[DOMAIN].get("external_dashboard")
+    """Match a HA device to an external dashboard device."""
+    coordinator = hass.data[DOMAIN].get("external_dashboard")
     if not coordinator or not coordinator.data:
         return None
     
-    # Use the coordinator's matching method
-    return coordinator.get_device_by_name(device_name)
+    # First try matching by device name
+    result = coordinator.get_device_by_name(device_name)
+    if result:
+        return result
+    
+    # Try original ESPHome name (before user renamed it)
+    if original_name:
+        result = coordinator.get_device_by_name(original_name)
+        if result:
+            return result
+    
+    # If no match and we have entity_id, try extracting from entity
+    if entity_id:
+        name_from_entity = (
+            entity_id
+            .replace("update.", "")
+            .replace("_firmware_update", "")
+            .replace("_update", "")
+        )
+        result = coordinator.get_device_by_name(name_from_entity)
+        if result:
+            return result
+    
+    return None
 
 
 def _find_status_entity(
@@ -1101,7 +1147,16 @@ def _get_esphome_update_entities(hass: HomeAssistant) -> list[dict[str, Any]]:
         normalized_name = _normalize_device_name(name)
         
         if dashboard_mode == DASHBOARD_MODE_EXTERNAL and external_coordinator:
-            external_device_info = _match_device_to_external_dashboard(hass, name)
+            # Get original ESPHome name (before user renamed it)
+            original_name = None
+            if device_id:
+                dev = dev_reg.async_get(device_id)
+                if dev:
+                    original_name = dev.name
+            
+            external_device_info = _match_device_to_external_dashboard(
+                hass, name, entity_id, original_name=original_name
+            )
             if external_device_info:
                 is_external_device = True
                 builder_version = external_builder_version
@@ -1246,7 +1301,7 @@ def _get_esphome_update_entities(hass: HomeAssistant) -> list[dict[str, Any]]:
                 "is_external": is_external_device,
                 "failed": entity_id in failed_devices,
             })
-
+            
     # ── Process ESPHome devices WITHOUT update entity ──────────────────
     # These are devices in ESPHome integration but without firmware entity
     for device in dev_reg.devices.values():
@@ -1265,6 +1320,7 @@ def _get_esphome_update_entities(hass: HomeAssistant) -> list[dict[str, Any]]:
         processed_device_ids.add(device.id)
         
         name = device.name_by_user or device.name or "Unknown device"
+        original_name = device.name
         normalized_name = _normalize_device_name(name)
         
         # Skip if already processed (by name)
@@ -1288,7 +1344,10 @@ def _get_esphome_update_entities(hass: HomeAssistant) -> list[dict[str, Any]]:
         
         # Check if we can match to external dashboard
         if dashboard_mode == DASHBOARD_MODE_EXTERNAL and external_coordinator:
-            external_device_info = _match_device_to_external_dashboard(hass, name)
+            external_device_info = _match_device_to_external_dashboard(
+                hass, name, None, original_name=original_name
+            )
+            
             if external_device_info:
                 is_external_device = True
                 builder_version = external_builder_version
@@ -1296,15 +1355,23 @@ def _get_esphome_update_entities(hass: HomeAssistant) -> list[dict[str, Any]]:
                 deployed = external_device_info.get("deployed_version")
                 if deployed:
                     installed = _parse_version(deployed)
-                # Remember this device as external
-                if normalized_name not in remembered_external_devices:
-                    remembered_external_devices[normalized_name] = True
+                # Remember this device as external - use original name if available
+                remember_name = _normalize_device_name(original_name) if original_name else normalized_name
+                if remember_name not in remembered_external_devices:
+                    remembered_external_devices[remember_name] = True
                     remembered_external_devices_changed = True
             elif normalized_name in remembered_external_devices:
                 # Remembered as external but dashboard offline or device not found
                 is_external_device = True
                 builder_version = external_builder_version
                 is_unavailable = True
+                # Try to get project version from device info
+            elif original_name and _normalize_device_name(original_name) in remembered_external_devices:
+                # Device was renamed, but original name is remembered as external
+                is_external_device = True
+                builder_version = external_builder_version
+                is_unavailable = True
+                # Try to get project version from device info
         
         # In LOCAL mode, devices without update entity are always unavailable
         # (they're not in the local ESPHome add-on)
@@ -1340,9 +1407,13 @@ def _get_esphome_update_entities(hass: HomeAssistant) -> list[dict[str, Any]]:
     current_esphome_device_names: set[str] = set()
     for device in dev_reg.devices.values():
         if device.id in esphome_device_ids:
+            # Add current name (user-defined or original)
             device_name = device.name_by_user or device.name
             if device_name:
                 current_esphome_device_names.add(_normalize_device_name(device_name))
+            # Also add original name to prevent cleanup of renamed devices
+            if device.name:
+                current_esphome_device_names.add(_normalize_device_name(device.name))
     
     # Remove remembered devices that no longer exist in HA
     remembered_to_remove = [
@@ -1366,120 +1437,6 @@ def _get_esphome_update_entities(hass: HomeAssistant) -> list[dict[str, Any]]:
     devices.sort(key=lambda d: (d["name"] or "").lower())
     return devices
 
-    # ── Process ESPHome devices WITHOUT update entity ──────────────────
-    # These are devices in ESPHome integration but without firmware entity
-    for device in dev_reg.devices.values():
-        if device.id not in esphome_device_ids:
-            continue
-        
-        # Skip if already processed via update entity
-        if device.id in devices_with_update_entity:
-            continue
-        
-        # Mark as processed
-        processed_device_ids.add(device.id)
-        
-        name = device.name_by_user or device.name or "Unknown device"
-        normalized_name = _normalize_device_name(name)
-        
-        # Skip if already processed (by name)
-        if normalized_name in processed_external_devices:
-            continue
-        
-        processed_external_devices.add(normalized_name)
-        
-        installed = _parse_version(device.sw_version)
-        online = _is_device_online(hass, ent_reg, device.id)
-        
-        # Skip non-ESPHome firmware
-        if not _is_esphome_version(installed):
-            continue
-        
-        # Determine if this is an external device and if it can be updated
-        is_external_device = False
-        builder_version = None
-        is_unavailable = True  # Default: unavailable until we find a dashboard
-        external_device_info = None
-        
-        # Check if we can match to external dashboard
-        if dashboard_mode == DASHBOARD_MODE_EXTERNAL and external_coordinator:
-            external_device_info = _match_device_to_external_dashboard(hass, name)
-            if external_device_info:
-                is_external_device = True
-                builder_version = external_builder_version
-                is_unavailable = not external_dashboard_available
-                deployed = external_device_info.get("deployed_version")
-                if deployed:
-                    installed = _parse_version(deployed)
-                # Remember this device as external
-                if normalized_name not in remembered_external_devices:
-                    remembered_external_devices[normalized_name] = True
-                    remembered_external_devices_changed = True
-            elif normalized_name in remembered_external_devices:
-                # Remembered as external but dashboard offline or device not found
-                is_external_device = True
-                builder_version = external_builder_version
-                is_unavailable = True
-        
-        # In LOCAL mode, devices without update entity are always unavailable
-        # (they're not in the local ESPHome add-on)
-        
-        update_available = False
-        if builder_version and not is_unavailable:
-            update_available = _is_update_available(installed, builder_version)
-        
-        # Create unique identifier
-        if is_external_device:
-            device_entity_id = f"external:{normalized_name}"
-        else:
-            device_entity_id = f"device:{normalized_name}"
-        
-        devices.append({
-            "entity_id": device_entity_id,
-            "name": name,
-            "current_version": installed,
-            "latest_version": builder_version if update_available else None,
-            "update_available": update_available,
-            "in_progress": False,
-            "firmware_disabled": False,
-            "firmware_unavailable": is_unavailable,
-            "enabling": False,
-            "online": online,
-            "skipped": False,
-            "is_external": is_external_device,
-            "failed": device_entity_id in failed_devices,
-        })
-
-    # ── Cleanup: Remove remembered devices that no longer exist in HA ──────
-    # Get all current ESPHome device names (only from HA, not from external dashboard)
-    current_esphome_device_names: set[str] = set()
-    for device in dev_reg.devices.values():
-        if device.id in esphome_device_ids:
-            device_name = device.name_by_user or device.name
-            if device_name:
-                current_esphome_device_names.add(_normalize_device_name(device_name))
-    
-    # Remove remembered devices that no longer exist in HA
-    remembered_to_remove = [
-        name for name in remembered_external_devices
-        if name not in current_esphome_device_names
-    ]
-    for name in remembered_to_remove:
-        del remembered_external_devices[name]
-        remembered_external_devices_changed = True
-        _LOGGER.debug("Removed remembered external device '%s' (no longer exists in HA)", name)
-
-    # Save remembered external devices if changed
-    if remembered_external_devices_changed:
-        settings["external_devices"] = remembered_external_devices
-        hass.data[DOMAIN]["settings"] = settings
-        # Schedule async save
-        store: Store = hass.data[DOMAIN].get("store")
-        if store:
-            hass.async_create_task(store.async_save(settings))
-
-    devices.sort(key=lambda d: (d["name"] or "").lower())
-    return devices
 
 # ── WebSocket Commands ────────────────────────────────────────────
 
