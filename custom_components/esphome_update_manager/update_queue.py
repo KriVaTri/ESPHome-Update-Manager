@@ -291,13 +291,10 @@ class UpdateQueue:
         """Check if this is an external dashboard device."""
         return entity_id.startswith("external:")
 
-    def _get_external_config(self, entity_id: str) -> str:
-        """Extract configuration name from external entity_id."""
-        # Format: external:device-name.yaml or external:device-name
-        config = entity_id.replace("external:", "", 1)
-        if not config.endswith(".yaml"):
-            config = f"{config}.yaml"
-        return config
+    def _get_external_device_name(self, entity_id: str) -> str:
+        """Extract device name from external entity_id (without .yaml)."""
+        # Format: external:device-name
+        return entity_id.replace("external:", "", 1)
 
     def _is_entity_available(self, entity_id: str) -> bool:
         """Check if entity is available. External devices are always 'available'."""
@@ -387,6 +384,7 @@ class UpdateQueue:
     async def _update_external_device(self, item: DeviceUpdateResult) -> None:
         """Update a device via the external ESPHome dashboard."""
         from .dashboard import ExternalDashboardCoordinator
+        from . import _normalize_device_name
 
         coordinator: ExternalDashboardCoordinator | None = self.hass.data[DOMAIN].get("external_dashboard")
         
@@ -402,8 +400,46 @@ class UpdateQueue:
             item.finished_at = datetime.now()
             return
 
-        # Get configuration name
-        configuration = self._get_external_config(item.entity_id)
+        # Get device name from entity_id and find matching dashboard device
+        ha_device_name = self._get_external_device_name(item.entity_id)
+        
+        # Find the actual ESPHome config name from dashboard
+        configuration = None
+        normalized_ha_name = _normalize_device_name(ha_device_name)
+        
+        for config_name, device_info in coordinator.data.items():
+            if _normalize_device_name(config_name) == normalized_ha_name:
+                configuration = device_info.get("configuration", config_name)
+                if not configuration.endswith(".yaml"):
+                    configuration = f"{configuration}.yaml"
+                break
+        
+        # If not found by HA name, try to find by looking up the HA device's original name
+        if not configuration:
+            from homeassistant.helpers import device_registry as dr
+            dev_reg = dr.async_get(self.hass)
+            
+            # Find device by searching for matching name
+            for device in dev_reg.devices.values():
+                device_name = device.name_by_user or device.name
+                if device_name and _normalize_device_name(device_name) == normalized_ha_name:
+                    # Found the device, now try original name
+                    original_name = device.name
+                    if original_name:
+                        normalized_original = _normalize_device_name(original_name)
+                        for config_name, device_info in coordinator.data.items():
+                            if _normalize_device_name(config_name) == normalized_original:
+                                configuration = device_info.get("configuration", config_name)
+                                if not configuration.endswith(".yaml"):
+                                    configuration = f"{configuration}.yaml"
+                                break
+                    break
+        
+        if not configuration:
+            item.status = STATUS_FAILED
+            item.error = f"Could not find ESPHome configuration for {ha_device_name}"
+            item.finished_at = datetime.now()
+            return
         
         _LOGGER.info("Updating external device via dashboard: %s", configuration)
 
