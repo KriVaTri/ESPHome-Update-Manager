@@ -1,6 +1,7 @@
 """Dashboard coordinator for ESPHome Update Manager."""
 from __future__ import annotations
 
+import re
 import asyncio
 import base64
 import logging
@@ -347,7 +348,17 @@ class ExternalDashboardCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 return device
 
         def normalize(s: str) -> str:
-            return s.lower().replace(" ", "-").replace("_", "-")
+            """Normalize device name for matching (ESPHome style: lowercase, only a-z, 0-9, - allowed)."""
+            normalized = s.lower()
+            # Replace spaces and underscores with dashes
+            normalized = normalized.replace(" ", "-").replace("_", "-")
+            # Remove characters not allowed in ESPHome names
+            normalized = re.sub(r'[^a-z0-9-]', '', normalized)
+            # Reduce multiple dashes to single dash
+            normalized = re.sub(r'-+', '-', normalized)
+            # Remove leading/trailing dashes
+            normalized = normalized.strip('-')
+            return normalized
 
         name_normalized = normalize(name)
         for key, device in self.data.items():
