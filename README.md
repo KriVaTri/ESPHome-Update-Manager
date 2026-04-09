@@ -7,7 +7,7 @@ ESPHome device update manager for Home Assistant.
 
 A custom Home Assistant integration that provides a dedicated panel for managing ESPHome firmware updates across all your ESPHome devices.
 
-> **Note:** Version 1.4.0+ supports both local and external ESPHome dashboards. Earlier versions only support the local ESPHome add-on.
+> **Note:** Since version 1.4.0+ the integration supports both local and external ESPHome dashboards. Earlier versions only support the local ESPHome add-on.
 
 ## Features
 
