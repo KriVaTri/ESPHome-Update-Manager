@@ -25,7 +25,7 @@ A custom Home Assistant integration that provides a dedicated panel for managing
 - **Update log** — Detailed log of all update results, viewable directly in the panel
 - **Log history** — Access previous update logs via the 3-dots menu (configurable backup count)
 - **VS Code Server add-on management** — Optionally stop the VS Code Server add-on during updates to free memory, and automatically restart it when updates are complete
-- **Real-time status** — Live progress tracking with online/offline indicators for each device
+- **Real-time status** — Live progress tracking with online/offline indicators for each device (when the "status" entity is installed on the device)
 - **Resilient queue** — If a device fails, the queue continues with the next device
 - **Cancel anytime** — Cancel running updates at any time; remaining devices are marked as cancelled
 
