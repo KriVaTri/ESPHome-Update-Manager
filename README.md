@@ -112,7 +112,7 @@ The panel shows all ESPHome devices with:
 | Version | Current version → available version `or` Current version only if up-to-date|
 | Button | Action button (see below) |
 
-### Device buttons
+### Device button
 
 | Button | Meaning |
 |--------|---------|
