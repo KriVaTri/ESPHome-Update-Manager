@@ -51,7 +51,7 @@ A custom Home Assistant integration that provides a dedicated panel for managing
 
    Or manual: Copy the `custom_components/esphome_update_manager` folder to your Home Assistant `config/custom_components/` directory and restart Home Assistant
 2. Add integration: Home Assistant → Settings → Devices & Services → Add Integration → search **ESPHome Update Manager** → submit
-3. Optionally configure an external ESPHome dashboard URL (see Configuration)
+3. Optionally configure an external ESPHome dashboard URL (see Configuration) and log backup count
 4. A new **ESPHome Updates** panel appears in the sidebar
 
 
