@@ -359,6 +359,16 @@ To move a device from one dashboard to another, follow these steps:
 ### Device shows "Skipped" but I want to update it
 - To clear the skipped update go to Settings → System → Updates → ⋮ menu
 
+### Uninstallation
+
+To completely remove the integration, follow these steps in order:
+
+1. Go to **Settings** → **Devices & Services** → **ESPHome Update Manager** → **Delete**
+2. Go to **HACS** → **ESPHome Update Manager** → **Remove**
+3. Restart Home Assistant
+
+⚠️ **Important:** Always remove the integration from Settings first, before removing it from HACS. This ensures all files and settings are properly cleaned up.
+
 ## License
 
 MIT License — see [LICENSE](LICENSE) for details.
