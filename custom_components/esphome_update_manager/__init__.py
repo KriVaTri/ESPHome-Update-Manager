@@ -470,6 +470,23 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     return True
 
 
+async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Handle removal of the config entry."""
+    _LOGGER.info("Removing ESPHome Update Manager - cleaning up files")
+    
+    # Remove www files
+    www_dir = Path(hass.config.path("www")) / "esphome-update-manager"
+    if await hass.async_add_executor_job(www_dir.exists):
+        await hass.async_add_executor_job(shutil.rmtree, www_dir)
+        _LOGGER.info("Removed www directory: %s", www_dir)
+    
+    # Remove storage file
+    storage_path = Path(hass.config.path(".storage")) / STORAGE_KEY
+    if await hass.async_add_executor_job(storage_path.exists):
+        await hass.async_add_executor_job(storage_path.unlink)
+        _LOGGER.info("Removed storage file: %s", storage_path)
+
+
 # ── Auto-update logic ──────────────────────────────────────────────
 
 def _get_esphome_device_ids(hass: HomeAssistant) -> set[str]:
