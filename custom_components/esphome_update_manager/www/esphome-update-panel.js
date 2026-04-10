@@ -1152,10 +1152,10 @@ _expireUpdating(entityId) {
       .addon-option input[type="checkbox"] { margin: 0; }
       .addon-option .addon-name { color: #ff9800; font-weight: 500; }
       .addon-option .addon-status { margin-left: auto; font-size: 0.85em; }
-      .addon-running { color: #4caf50; margin-right: 10px; }
-      .addon-stopped { color: #f44336; margin-right: 10px; }
-      .addon-stopping { color: #ff9800; margin-right: 10px; }
-      .addon-starting { color: #ff9800; margin-right: 10px; }
+      .addon-running { color: #4caf50; margin-right: 2px; }
+      .addon-stopped { color: #f44336; margin-right: 2px; }
+      .addon-stopping { color: #ff9800; margin-right: 2px; }
+      .addon-starting { color: #ff9800; margin-right: 2px; }
 
       .results { margin-top: 24px; }
       .results-header {
@@ -1345,7 +1345,7 @@ _expireUpdating(entityId) {
                 this._stopAddonDuringUpdate = e.target.checked;
                 this._saveAutoUpdateSettings();
               }} />
-            <span>Stop <span class="addon-name">${this._addonInfo.name}</span> during updates to free memory</span>
+            <span>Stop <span class="addon-name">${this._addonInfo.name}</span> during updates</span>
             <span class="addon-status ${this._getAddonStatusDisplay().cls}">${this._getAddonStatusDisplay().text}</span>
           </div>
         ` : ""}
