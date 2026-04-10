@@ -247,7 +247,7 @@ async def _delayed_setup_auto_update(hass: HomeAssistant) -> None:
     async def _setup_after_start(_hass: HomeAssistant) -> None:
         # Additional delay to ensure all entities are fully loaded
         await asyncio.sleep(30)
-        _LOGGER.info("Setting up auto-update listener after Home Assistant started")
+        _LOGGER.debug("Setting up auto-update listener after Home Assistant started")
         await _setup_auto_update_listener(hass)
         # Check for any pending updates
         await _check_and_start_auto_update(hass)
@@ -543,7 +543,7 @@ async def _setup_auto_update_listener(hass: HomeAssistant) -> None:
             return
         
         old_state_str = old_state.state if old_state else "None"
-        _LOGGER.info(
+        _LOGGER.debug(
             "ESPHome update available: %s (state: %s -> %s), triggering auto-update in 5 seconds",
             entity_id,
             old_state_str,
@@ -576,7 +576,7 @@ async def _setup_auto_update_listener(hass: HomeAssistant) -> None:
             return
         
         old_state_str = old_state.state if old_state else "None"
-        _LOGGER.info(
+        _LOGGER.debug(
             "ESPHome device came online: %s (state: %s -> %s), checking for updates in 5 seconds",
             entity_id,
             old_state_str,
@@ -637,7 +637,7 @@ async def _setup_auto_update_listener(hass: HomeAssistant) -> None:
     
     # Log which entities we're monitoring
     esphome_update_entities = [eid for eid in all_update_entity_ids if _is_esphome_update_entity(hass, eid)]
-    _LOGGER.info(
+    _LOGGER.debug(
         "Auto-update listener active. Monitoring %d update entities (%d ESPHome) and %d status sensors",
         len(all_update_entity_ids),
         len(esphome_update_entities),
@@ -694,7 +694,7 @@ async def _check_and_start_auto_update(hass: HomeAssistant) -> None:
     if not updatable:
         return
     
-    _LOGGER.info("Starting auto-update for %d devices: %s", len(updatable), updatable)
+    _LOGGER.debug("Starting auto-update for %d devices: %s", len(updatable), updatable)
     
     # Check if VS Code Server should be stopped
     stop_addon_slug = None
@@ -719,7 +719,7 @@ async def _remove_auto_update_listener(hass: HomeAssistant) -> None:
     for unsub in hass.data[DOMAIN].get("unsubscribe_listeners", []):
         unsub()
     hass.data[DOMAIN]["unsubscribe_listeners"] = []
-    _LOGGER.info("Auto-update listener removed")
+    _LOGGER.debug("Auto-update listener removed")
 
 
 # ── Service handlers ───────────────────────────────────────────────
@@ -1099,6 +1099,7 @@ def _get_esphome_update_entities(hass: HomeAssistant) -> list[dict[str, Any]]:
     
     # Get failed devices for marking
     failed_devices = hass.data[DOMAIN].get("failed_devices", {})
+    failed_devices_changed = False
     
     devices = []
     esphome_device_ids = _get_esphome_device_ids(hass)
@@ -1434,9 +1435,27 @@ def _get_esphome_update_entities(hass: HomeAssistant) -> list[dict[str, Any]]:
         if store:
             hass.async_create_task(store.async_save(settings))
 
+    # ── Cleanup: Remove devices from failed list if they are now up-to-date ──────
+    for d in devices:
+        entity_id = d.get("entity_id")
+        if entity_id and entity_id in failed_devices:
+            # Device is up-to-date (no update available and not skipped)
+            if not d.get("update_available") and not d.get("skipped"):
+                del failed_devices[entity_id]
+                failed_devices_changed = True
+                _LOGGER.debug("Removed %s from failed devices - now up-to-date", entity_id)
+    
+    # Save failed devices if changed
+    if failed_devices_changed:
+        hass.data[DOMAIN]["failed_devices"] = failed_devices
+        settings["failed_devices"] = failed_devices
+        hass.data[DOMAIN]["settings"] = settings
+        store: Store = hass.data[DOMAIN].get("store")
+        if store:
+            hass.async_create_task(store.async_save(settings))
+
     devices.sort(key=lambda d: (d["name"] or "").lower())
     return devices
-
 
 # ── WebSocket Commands ────────────────────────────────────────────
 
