@@ -705,21 +705,21 @@ _expireUpdating(entityId) {
   }
 
   async _updateSingle(entityId) {
-    const device = this.devices.find(d => d.entity_id === entityId);
-    const versionInfo = {};
-    if (device) {
-      versionInfo[entityId] = {
-        from: device.current_version,
-        to: device.latest_version,
-      };
-    }
-
-    const timeoutId = setTimeout(() => this._expireUpdating(entityId), UPDATING_TIMEOUT_MS);
-    this._updatingIds = new Map(this._updatingIds);
-    this._updatingIds.set(entityId, { startedAt: Date.now(), timeoutId });
-    this.requestUpdate();
-
     try {
+      const device = this.devices.find(d => d.entity_id === entityId);
+      const versionInfo = {};
+      if (device) {
+        versionInfo[entityId] = {
+          from: device.current_version || "unknown",
+          to: device.latest_version || "unknown",
+        };
+      }
+
+      const timeoutId = setTimeout(() => this._expireUpdating(entityId), UPDATING_TIMEOUT_MS);
+      this._updatingIds = new Map(this._updatingIds);
+      this._updatingIds.set(entityId, { startedAt: Date.now(), timeoutId });
+      this.requestUpdate();
+
       await this.hass.callWS({
         type: "esphome_update_manager/start",
         entity_ids: [entityId],
@@ -729,11 +729,12 @@ _expireUpdating(entityId) {
       this.running = true;
       this._startStatusPolling();
     } catch (e) {
+      console.error("[ESPHome Update Manager] _updateSingle error:", e);
       const info = this._updatingIds.get(entityId);
       if (info?.timeoutId) clearTimeout(info.timeoutId);
       this._updatingIds.delete(entityId);
       this._updatingIds = new Map(this._updatingIds);
-      this._addLocalResult(entityId, "failed", "Update failed to start: " + e.message);
+      this._addLocalResult(entityId, "failed", "Update failed: " + String(e?.message || e));
       this.requestUpdate();
     }
   }
@@ -742,24 +743,24 @@ _expireUpdating(entityId) {
     if (this.selected.size === 0) return;
     const ids = [...this.selected];
 
-    const versionInfo = {};
-    ids.forEach(id => {
-      const device = this.devices.find(d => d.entity_id === id);
-      if (device) {
-        versionInfo[id] = {
-          from: device.current_version,
-          to: device.latest_version,
-        };
-      }
-    });
-
-    this._updatingIds = new Map(this._updatingIds);
-    ids.forEach((id) => {
-      this._updatingIds.set(id, { startedAt: null, timeoutId: null, isRunning: false });
-    });
-    this.requestUpdate();
-
     try {
+      const versionInfo = {};
+      ids.forEach(id => {
+        const device = this.devices.find(d => d.entity_id === id);
+        if (device) {
+          versionInfo[id] = {
+            from: device.current_version || "unknown",
+            to: device.latest_version || "unknown",
+          };
+        }
+      });
+
+      this._updatingIds = new Map(this._updatingIds);
+      ids.forEach((id) => {
+        this._updatingIds.set(id, { startedAt: null, timeoutId: null, isRunning: false });
+      });
+      this.requestUpdate();
+
       await this.hass.callWS({
         type: "esphome_update_manager/start",
         entity_ids: ids,
@@ -769,9 +770,10 @@ _expireUpdating(entityId) {
       this.running = true;
       this._startStatusPolling();
     } catch (e) {
+      console.error("[ESPHome Update Manager] _startBatchUpdate error:", e);
       ids.forEach((id) => {
         this._updatingIds.delete(id);
-        this._addLocalResult(id, "failed", "Batch update failed to start: " + e.message);
+        this._addLocalResult(id, "failed", "Batch update failed: " + String(e?.message || e));
       });
       this._updatingIds = new Map(this._updatingIds);
       this.requestUpdate();
@@ -900,8 +902,17 @@ _expireUpdating(entityId) {
 
   _handleButtonClick(d) {
     const btn = this._getDeviceButton(d);
-    if (btn.action === "enable") this._enableEntity(d.entity_id);
-    else if (btn.action === "update") this._updateSingle(d.entity_id);
+    if (btn.action === "enable") {
+      this._enableEntity(d.entity_id).catch(e => {
+        console.error("[ESPHome Update Manager] Enable error:", e);
+        this._addLocalResult(d.entity_id, "failed", "Enable failed to start: " + String(e?.message || e));
+      });
+    } else if (btn.action === "update") {
+      this._updateSingle(d.entity_id).catch(e => {
+        console.error("[ESPHome Update Manager] Update error:", e);
+        this._addLocalResult(d.entity_id, "failed", "Update failed to start: " + String(e?.message || e));
+      });
+    }
   }
 
   _canSelect(d) {
@@ -1369,7 +1380,10 @@ _expireUpdating(entityId) {
             ${this.running ? html`
               <button class="btn-cancel" 
                 ?disabled=${this._cancelling}
-                @click=${this._cancelUpdates}>
+                @click=${() => this._cancelUpdates().catch(e => {
+                  console.error("[ESPHome Update Manager] Cancel error:", e);
+                  this._addLocalResult("Cancel", "failed", "Cancel failed to start: " + String(e?.message || e));
+                })}>
                 ${this._cancelling ? html`<span class="spinner"></span>` : ""}
                 ${this._cancelling ? "Cancelling…" : "⏹ Cancel"}
               </button>
@@ -1380,7 +1394,10 @@ _expireUpdating(entityId) {
               </button>
               <button class="btn-batch-update"
                 ?disabled=${this.selected.size === 0}
-                @click=${this._startBatchUpdate}>
+                @click=${() => this._startBatchUpdate().catch(e => {
+                  console.error("[ESPHome Update Manager] Batch update error:", e);
+                  this._addLocalResult("Batch update", "failed", "Batch update failed to start: " + String(e?.message || e));
+                })}>
                 ▶ Update selected (${this.selected.size})
               </button>
               <span class="toolbar-info">${selectableCount} device${selectableCount !== 1 ? "s" : ""} can be updated</span>
