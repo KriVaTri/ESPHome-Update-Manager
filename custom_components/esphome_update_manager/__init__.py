@@ -259,10 +259,18 @@ def _copy_frontend(source: Path, dest_dir: Path, dest: Path) -> None:
     """Copy frontend panel files to www directory."""
     dest_dir.mkdir(parents=True, exist_ok=True)
     shutil.copy2(source, dest)
-    
+
     logo_source = source.parent.parent / "brand" / "logo.png"
     if logo_source.exists():
         shutil.copy2(logo_source, dest_dir / "logo.png")
+
+    # Copy bundled lit-element library
+    lib_source = source.parent / "lit"
+    lib_dest = dest_dir / "lit"
+    if lib_source.exists():
+        if lib_dest.exists():
+            shutil.rmtree(lib_dest)
+        shutil.copytree(lib_source, lib_dest)
 
 
 def _read_manifest(manifest_path: Path) -> dict:
