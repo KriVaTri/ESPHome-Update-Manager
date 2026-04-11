@@ -2,7 +2,7 @@ import {
   LitElement,
   html,
   css,
-} from "https://unpkg.com/lit-element@2.4.0/lit-element.js?module";
+} from "./lit/lit-element.js";
 
 const ENABLING_TIMEOUT_MS = 90000;
 const UPDATING_TIMEOUT_MS = 1200000;
