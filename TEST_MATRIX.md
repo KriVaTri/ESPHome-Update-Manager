@@ -9,13 +9,13 @@
 
 | # | Test | Auto-update | Selected | Service | Result |
 |---|------|:-----------:|:--------:|:-------:|--------|
-| 1 | Update firmware, no project version bump | ⭐ | | ⭐ | |
-| 2 | Update firmware with project version bump via update | ⭐ | ✅ | ⭐ | |
+| 1 | Update firmware, no project version bump |  | |  | |
+| 2 | Update firmware with project version bump via update |  |  |  | |
 | 3 | Update firmware with project version bump via manual force install | | | | |
 | 4 | Force install without changes | | | | |
 | 5 | Update firmware from no project to project version | | | | |
 | 6 | Update firmware from project to no project version | | | | |
-| 7 | Update firmware without project version | ⭐ | | ⭐ | |
+| 7 | Update firmware without project version |  | |  | |
 | 8 | Manual force install from project to no project version | | | | |
 | 9 | Manual force install | | | | |
 | 10 | Auto force install: device offline → online | | | | |
@@ -27,13 +27,13 @@
 
 | # | Test | Auto-update | Selected | Service | Result |
 |---|------|:-----------:|:--------:|:-------:|--------|
-| 1 | Update firmware, no project version bump | ⭐ | | ⭐ | |
-| 2 | Update firmware with project version bump via update | ⭐ | ✅ | ⭐ | |
+| 1 | Update firmware, no project version bump |  | |  | |
+| 2 | Update firmware with project version bump via update |  |  |  | |
 | 3 | Update firmware with project version bump via manual force install | | | | |
 | 4 | Force install without changes | | | | |
 | 5 | Update firmware from no project to project version | | | | |
 | 6 | Update firmware from project to no project version | | | | |
-| 7 | Update firmware without project version | ⭐ | | ⭐ | |
+| 7 | Update firmware without project version |  | |  | |
 | 8 | Manual force install from project to no project version | | | | |
 | 9 | Manual force install | | | | |
 | 10 | Auto force install: device offline → online | | | | |
@@ -75,9 +75,5 @@
 
 | Symbol | Meaning |
 |--------|---------|
-| ⭐ | Critical for current refactor — must be tested |
-| ✅ | Already tested and passed |
 | ✔️ | Tested and passed |
 | ❌ | Tested and failed |
-| ⏭️ | Skipped |
-| 🔄 | In progress |
