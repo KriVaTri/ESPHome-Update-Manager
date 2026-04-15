@@ -331,7 +331,7 @@ Access update logs via the **⋮** menu in the top-right corner of the panel:
 - **Previous Logs** — Browse previous update logs (configurable, default: 5)
 
 Each log includes:
-- Timestamp of the update run and integration version used
+- Timestamp of the job run and integration version used
 - Job type (Update or Force Install)
 - Summary with success/failed/skipped/cancelled counts
 - Details per device including status, version (from → to), start time, finish time, and any error messages
