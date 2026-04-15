@@ -991,6 +991,11 @@ class ESPHomeUpdatePanel extends LitElement {
       }
       .sidebar-toggle:hover { background: rgba(255,255,255,0.1); }
       .sidebar-toggle svg { width: 24px; height: 24px; fill: currentColor; }
+      .header-wrapper {
+        position: sticky;
+        top: 0;
+        z-index: 50;
+      }
       h1 {
         margin: 0 0 8px;
         padding: 8px 16px;
@@ -1120,7 +1125,7 @@ class ESPHomeUpdatePanel extends LitElement {
         align-items: center;
         justify-content: center;
       }
-      .btn-select-all input[type="checkbox"] { width: auto; height: auto; cursor: pointer; }
+      .btn-select-all input[type="checkbox"] { margin: 4px; cursor: pointer; }
       .btn-select-all input[type="checkbox"]:disabled { opacity: 0.6; filter: brightness(2); }
       .btn-batch-update { background: #2196f3; color: white; }
       .btn-batch-update:hover:not(:disabled) { background: #1976d2; }
@@ -1227,7 +1232,7 @@ class ESPHomeUpdatePanel extends LitElement {
         }
         .content { padding-left: 0; padding-right: 0; }
         .device-row { padding-left: 10px; padding-right: 10px; }
-        .toolbar { margin-left: 0; padding-left: 11px; }
+        .toolbar { margin-left: 0; padding-left: 10px; }
         .addon-option { padding-left: 14px; padding-right: 14px; }
         .result-row { padding-left: 10px; padding-right: 10px; }
         .name { cursor: pointer; }
@@ -1257,27 +1262,29 @@ class ESPHomeUpdatePanel extends LitElement {
 
       ${this._showLogPopup ? this._renderLogPopup() : ""}
 
-      ${this.narrow ? html`
-        <div class="app-toolbar">
-          <button class="sidebar-toggle" @click=${this._toggleSidebar} title="Open sidebar">
-            <svg viewBox="0 0 24 24">
-              <path d="M3,6H21V8H3V6M3,11H21V13H3V11M3,16H21V18H3V16Z" />
-            </svg>
-          </button>
-          <span class="title">ESPHome Update Manager</span>
-        </div>
-      ` : ""}
+      <div class="header-wrapper">
+        ${this.narrow ? html`
+          <div class="app-toolbar">
+            <button class="sidebar-toggle" @click=${this._toggleSidebar} title="Open sidebar">
+              <svg viewBox="0 0 24 24">
+                <path d="M3,6H21V8H3V6M3,11H21V13H3V11M3,16H21V18H3V16Z" />
+              </svg>
+            </button>
+            <span class="title">ESPHome Update Manager</span>
+          </div>
+        ` : ""}
 
-      <h1>
-        <img src="/local/esphome-update-manager/logo.png"
-            style="height: 40px; vertical-align: middle; margin-right: 12px;">
-        ESPHome Update Manager
-        <span class="header-spacer"></span>
-        <div class="header-menu-container">
-          <button class="menu-btn" @click=${this._toggleMenu} title="View logs">⋮</button>
-          ${this._showMenu ? this._renderMenu() : ""}
-        </div>
-      </h1>
+        <h1>
+          <img src="/local/esphome-update-manager/logo.png"
+              style="height: 40px; vertical-align: middle; margin-right: 12px;">
+          ESPHome Update Manager
+          <span class="header-spacer"></span>
+          <div class="header-menu-container">
+            <button class="menu-btn" @click=${this._toggleMenu} title="View logs">⋮</button>
+            ${this._showMenu ? this._renderMenu() : ""}
+          </div>
+        </h1>
+      </div>
 
       <div class="content">
 
@@ -1290,7 +1297,7 @@ class ESPHomeUpdatePanel extends LitElement {
                 this._stopAddonDuringUpdate = e.target.checked;
                 this._saveAutoUpdateSettings();
               }} />
-            <span>Stop <span class="addon-name">${this._addonInfo.name}</span> during jobs</span>
+            <span>Stop <span class="addon-name">${this._addonInfo.name}</span> during updates</span>
             <span class="addon-status ${this._getAddonStatusDisplay().cls}">${this._getAddonStatusDisplay().text}</span>
           </div>
         ` : ""}
