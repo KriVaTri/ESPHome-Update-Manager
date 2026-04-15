@@ -19,3 +19,16 @@ start_updates:
       example: true
       selector:
         boolean:
+
+force_install:
+  name: ESPHome Yaml Force Install
+  description: Force compile and OTA install device(s) (even without pending update)
+  fields:
+    device_id:
+      name: Device(s)
+      description: The ESPHome device(s) to force install
+      required: true
+      selector:
+        device:
+          multiple: true
+          integration: esphome
