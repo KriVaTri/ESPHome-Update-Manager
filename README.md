@@ -226,6 +226,8 @@ The integration automatically checks whether the project version defined in the 
 | **HA restarts** | 30 seconds after Home Assistant has fully started, all currently online devices are checked |
 | **External dashboard comes online** | When the external dashboard reconnects, all currently online devices are checked |
 
+> **Note:** The project version auto-check runs independently of the Auto-update setting. When a device comes online and a higher project version is detected in the YAML, a Force Install will start automatically regardless of whether Auto-update is enabled or disabled.
+
 **How it works:**
 1. The integration reads the `sw_version` from the HA device registry (e.g., `1.0.2 (ESPHome 2026.3.1)`)
 2. It fetches the YAML config from the ESPHome dashboard and reads the `project.version` field
