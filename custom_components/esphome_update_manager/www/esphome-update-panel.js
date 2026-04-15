@@ -35,6 +35,9 @@ class ESPHomeUpdatePanel extends LitElement {
       _dashboardAvailable: { type: Boolean },
       _phase: { type: String },
       _addonName: { type: String },
+      _forceInstallMode: { type: Boolean },
+      _isForceInstallRun: { type: Boolean },
+      _forceInstallingIds: { type: Object },
     };
   }
 
@@ -73,6 +76,9 @@ class ESPHomeUpdatePanel extends LitElement {
     this._loadPendingFromStorage();
     this._phase = "idle";
     this._addonName = null;
+    this._forceInstallMode = false;
+    this._isForceInstallRun = false;
+    this._forceInstallingIds = new Map();
   }
 
   connectedCallback() {
@@ -87,8 +93,7 @@ class ESPHomeUpdatePanel extends LitElement {
         this._startStatusPolling();
       }
     });
-    
-    // Hide tooltip on scroll
+
     this._scrollHandler = () => {
       if (this._tooltipName) {
         this._tooltipName = null;
@@ -96,13 +101,12 @@ class ESPHomeUpdatePanel extends LitElement {
       }
     };
     window.addEventListener('scroll', this._scrollHandler, true);
-    
-    // Close menu when clicking outside
+
     this._documentClickHandler = (e) => {
       if (this._showMenu) {
         const menu = this.shadowRoot?.querySelector('.header-menu');
         const menuBtn = this.shadowRoot?.querySelector('.menu-btn');
-        if (menu && !menu.contains(e.composedPath()[0]) && 
+        if (menu && !menu.contains(e.composedPath()[0]) &&
             menuBtn && !menuBtn.contains(e.composedPath()[0])) {
           this._showMenu = false;
           this.requestUpdate();
@@ -110,14 +114,10 @@ class ESPHomeUpdatePanel extends LitElement {
       }
     };
     document.addEventListener('click', this._documentClickHandler);
-    
-    // Start polling immediately to catch backend-initiated updates
+
     this._startBackgroundStatusCheck();
-    
-    // Subscribe to dashboard status changes
     this._subscribeToDashboardStatus();
-    
-    // Check URL for show_log parameter
+    this._subscribeToDevicesUpdated();
     this._checkUrlForLogParam();
   }
 
@@ -158,19 +158,19 @@ class ESPHomeUpdatePanel extends LitElement {
       this._dashboardSubscription();
       this._dashboardSubscription = null;
     }
+    if (this._devicesUpdatedSubscription) {
+      this._devicesUpdatedSubscription();
+      this._devicesUpdatedSubscription = null;
+    }
   }
 
   async _subscribeToDashboardStatus() {
     try {
       this._dashboardSubscription = await this.hass.connection.subscribeMessage(
         (event) => {
-          console.log("Dashboard status event:", event);
           const wasAvailable = this._dashboardAvailable;
           this._dashboardAvailable = event.available;
-          
-          // If availability changed, reload devices
           if (wasAvailable !== null && wasAvailable !== event.available) {
-            console.log("Dashboard availability changed:", wasAvailable, "->", event.available);
             this._loadDevices();
           }
         },
@@ -181,13 +181,24 @@ class ESPHomeUpdatePanel extends LitElement {
     }
   }
 
+    async _subscribeToDevicesUpdated() {
+    try {
+      this._devicesUpdatedSubscription = await this.hass.connection.subscribeMessage(
+        () => {
+          if (!this.running) this._loadDevices();
+        },
+        { type: "esphome_update_manager/subscribe_devices_updated" }
+      );
+    } catch (e) {
+      console.error("Failed to subscribe to devices updated:", e);
+    }
+  }
+
   _checkUrlForLogParam() {
     const urlParams = new URLSearchParams(window.location.search);
     if (urlParams.get("show_log") === "1") {
       this._openLogPopup();
-      // Clean up URL
-      const newUrl = window.location.pathname;
-      window.history.replaceState({}, "", newUrl);
+      window.history.replaceState({}, "", window.location.pathname);
     }
   }
 
@@ -205,16 +216,10 @@ class ESPHomeUpdatePanel extends LitElement {
 
   _hasRelevantChange(prev, curr) {
     for (const d of this.devices) {
-      if (d.entity_id) {
-        if (prev[d.entity_id] !== curr[d.entity_id]) return true;
-      }
+      if (d.entity_id && prev[d.entity_id] !== curr[d.entity_id]) return true;
     }
     for (const key in curr) {
-      if (
-        key.startsWith("binary_sensor.") &&
-        key.endsWith("_status") &&
-        prev[key] !== curr[key]
-      ) {
+      if (key.startsWith("binary_sensor.") && key.endsWith("_status") && prev[key] !== curr[key]) {
         return true;
       }
     }
@@ -227,25 +232,16 @@ class ESPHomeUpdatePanel extends LitElement {
       this._refreshDebounce = null;
       this._loadDevices();
       this._loadAddonInfo();
+      setTimeout(() => this._loadDevices(), 30000);
     }, 2000);
   }
 
-  // ── Sidebar Toggle ──────────────────────────────────────────────
-
   _toggleSidebar() {
-    this.dispatchEvent(
-      new CustomEvent("hass-toggle-menu", {
-        bubbles: true,
-        composed: true,
-      })
-    );
+    this.dispatchEvent(new CustomEvent("hass-toggle-menu", { bubbles: true, composed: true }));
   }
-
-  // ── Menu ────────────────────────────────────────────────────────
 
   async _toggleMenu() {
     if (!this._showMenu) {
-      // Load backups when opening menu
       await this._loadLogBackups();
     }
     this._showMenu = !this._showMenu;
@@ -257,27 +253,17 @@ class ESPHomeUpdatePanel extends LitElement {
       const res = await this.hass.callWS({ type: "esphome_update_manager/list_log_backups" });
       this._logBackups = res.backups || [];
     } catch (e) {
-      console.error("Failed to load log backups", e);
       this._logBackups = [];
     }
   }
 
-  // ── Log Popup ───────────────────────────────────────────────────
-
   async _openLogPopup() {
     try {
       const res = await this.hass.callWS({ type: "esphome_update_manager/get_update_log" });
-      if (res.exists) {
-        this._logContent = res.content;
-        this._logTitle = "📄 Latest Update Log";
-        this._showLogPopup = true;
-      } else {
-        this._logContent = "No update log available yet.";
-        this._logTitle = "📄 Update Log";
-        this._showLogPopup = true;
-      }
+      this._logContent = res.exists ? res.content : "No update log available yet.";
+      this._logTitle = res.exists ? "📄 Latest Update Log" : "📄 Update Log";
+      this._showLogPopup = true;
     } catch (e) {
-      console.error("Failed to load update log", e);
       this._logContent = "Failed to load update log.";
       this._logTitle = "📄 Update Log";
       this._showLogPopup = true;
@@ -287,15 +273,14 @@ class ESPHomeUpdatePanel extends LitElement {
 
   async _openBackupLog(filename, displayName) {
     try {
-      const res = await this.hass.callWS({ 
+      const res = await this.hass.callWS({
         type: "esphome_update_manager/get_log_backup",
-        filename: filename,
+        filename,
       });
       this._logContent = res.content;
       this._logTitle = `📋 Log: ${displayName}`;
       this._showLogPopup = true;
     } catch (e) {
-      console.error("Failed to load backup log", e);
       this._logContent = "Failed to load backup log.";
       this._logTitle = "📋 Backup Log";
       this._showLogPopup = true;
@@ -307,8 +292,6 @@ class ESPHomeUpdatePanel extends LitElement {
     this._showLogPopup = false;
     this._logContent = null;
   }
-
-  // ── Results ─────────────────────────────────────────────────────
 
   get _allResults() {
     return [...this.results, ...this._localResults];
@@ -330,73 +313,69 @@ class ESPHomeUpdatePanel extends LitElement {
     this.requestUpdate();
   }
 
-  // ── Pending Storage ─────────────────────────────────────────────
-
   _loadPendingFromStorage() {
-      try {
-        // Load pending enables
-        const stored = localStorage.getItem('esphome_pending_enables');
-        if (stored) {
-          const data = JSON.parse(stored);
-          const now = Date.now();
-          
-          for (const [entityId, info] of Object.entries(data)) {
-            const elapsed = now - info.startedAt;
-            const remaining = ENABLING_TIMEOUT_MS - elapsed;
-            
-            if (remaining > 0) {
-              // Still within timeout, restore it
-              const timeoutId = setTimeout(() => this._expireEnabling(entityId), remaining);
-              this._pendingEnables.set(entityId, { startedAt: info.startedAt, timeoutId });
-            } else {
-              // Timeout already expired, mark as expired
-              this._expiredEnables.add(entityId);
-            }
+    try {
+      const stored = localStorage.getItem('esphome_pending_enables');
+      if (stored) {
+        const data = JSON.parse(stored);
+        const now = Date.now();
+        for (const [entityId, info] of Object.entries(data)) {
+          const elapsed = now - info.startedAt;
+          const remaining = ENABLING_TIMEOUT_MS - elapsed;
+          if (remaining > 0) {
+            const timeoutId = setTimeout(() => this._expireEnabling(entityId), remaining);
+            this._pendingEnables.set(entityId, { startedAt: info.startedAt, timeoutId });
+          } else {
+            this._expiredEnables.add(entityId);
           }
         }
-        
-        // Load expired enables
-        const storedExpired = localStorage.getItem('esphome_expired_enables');
-        if (storedExpired) {
-          const expiredList = JSON.parse(storedExpired);
-          expiredList.forEach(entityId => this._expiredEnables.add(entityId));
-        }
-      } catch (e) {
-        console.error("Failed to load pending enables from storage", e);
       }
+      const storedExpired = localStorage.getItem('esphome_expired_enables');
+      if (storedExpired) {
+        JSON.parse(storedExpired).forEach(entityId => this._expiredEnables.add(entityId));
+      }
+    } catch (e) {
+      console.error("Failed to load pending enables from storage", e);
+    }
   }
 
   _savePendingToStorage() {
-      try {
-        // Save pending enables
-        const data = {};
-        for (const [entityId, info] of this._pendingEnables) {
-          data[entityId] = { startedAt: info.startedAt };
-        }
-        localStorage.setItem('esphome_pending_enables', JSON.stringify(data));
-        
-        // Save expired enables
-        localStorage.setItem('esphome_expired_enables', JSON.stringify([...this._expiredEnables]));
-      } catch (e) {
-        console.error("Failed to save pending enables to storage", e);
+    try {
+      const data = {};
+      for (const [entityId, info] of this._pendingEnables) {
+        data[entityId] = { startedAt: info.startedAt };
       }
+      localStorage.setItem('esphome_pending_enables', JSON.stringify(data));
+      localStorage.setItem('esphome_expired_enables', JSON.stringify([...this._expiredEnables]));
+    } catch (e) {
+      console.error("Failed to save pending enables to storage", e);
+    }
   }
-
-  // ── Data ────────────────────────────────────────────────────────
 
   _restoreUpdatingState() {
     if (!this.results || this.results.length === 0) return;
     this._updatingIds = new Map(this._updatingIds);
+    
+    const merged = this._mergedDevices();
+    const deviceIdToEntityId = new Map(
+      merged.filter(d => d.device_id).map(d => [d.device_id, d.entity_id])
+    );
+
     for (const r of this.results) {
       if (r.status === "running" || r.status === "queued") {
-        if (!this._updatingIds.has(r.entity_id)) {
-          if (r.status === "running") {
-            const timeoutId = setTimeout(() => {
-              this._expireUpdating(r.entity_id);
-            }, UPDATING_TIMEOUT_MS);
-            this._updatingIds.set(r.entity_id, { startedAt: Date.now(), timeoutId, isRunning: true });
-          } else {
-            this._updatingIds.set(r.entity_id, { startedAt: null, timeoutId: null, isRunning: false });
+        if (!r.is_force_install) {
+          if (!this._updatingIds.has(r.entity_id)) {
+            if (r.status === "running") {
+              const timeoutId = setTimeout(() => this._expireUpdating(r.entity_id), UPDATING_TIMEOUT_MS);
+              this._updatingIds.set(r.entity_id, { startedAt: Date.now(), timeoutId, isRunning: true });
+            } else {
+              this._updatingIds.set(r.entity_id, { startedAt: null, timeoutId: null, isRunning: false });
+            }
+          }
+        } else {
+          const realEntityId = deviceIdToEntityId.get(r.device_id);
+          if (realEntityId && !this._forceInstallingIds.has(realEntityId)) {
+            this._forceInstallingIds.set(realEntityId, { startedAt: null, timeoutId: null, isRunning: false });
           }
         }
       }
@@ -409,31 +388,28 @@ class ESPHomeUpdatePanel extends LitElement {
   }
 
   _expireEnabling(entityId) {
-      const info = this._pendingEnables.get(entityId);
-      if (info?.timeoutId) clearTimeout(info.timeoutId);
-      this._pendingEnables.delete(entityId);
-      this._pendingEnables = new Map(this._pendingEnables);
-      
-      // Remember this entity's enable has expired
-      this._expiredEnables.add(entityId);
-      
-      this._savePendingToStorage();
-      this._loadDevices();
-      this.requestUpdate();
+    const info = this._pendingEnables.get(entityId);
+    if (info?.timeoutId) clearTimeout(info.timeoutId);
+    this._pendingEnables.delete(entityId);
+    this._pendingEnables = new Map(this._pendingEnables);
+    this._expiredEnables.add(entityId);
+    this._savePendingToStorage();
+    this._loadDevices();
+    this.requestUpdate();
   }
 
   _isUpdatingPending(entityId) {
     return this._updatingIds.has(entityId);
   }
 
-_expireUpdating(entityId) {
+  _expireUpdating(entityId) {
     const info = this._updatingIds.get(entityId);
     if (info?.timeoutId) clearTimeout(info.timeoutId);
     this._updatingIds.delete(entityId);
     this._updatingIds = new Map(this._updatingIds);
     this._addLocalResult(entityId, "failed", "Update timed out — device may be unresponsive");
     this._loadDevices();
-}
+  }
 
   _clearAllUpdatingTimers() {
     for (const [, info] of this._updatingIds) {
@@ -445,33 +421,22 @@ _expireUpdating(entityId) {
 
   _mergedDevices() {
     const toRemove = [];
-    
     const result = this.devices.map((d) => {
       const isPending = this._isEnablingPending(d.entity_id);
       const hasExpired = this._expiredEnables.has(d.entity_id);
-      
       if (isPending) {
-        // Check if enabling completed successfully (enabled AND available)
         if (!d.firmware_disabled && !d.enabling && !d.firmware_unavailable) {
-          // Success! Mark for removal after mapping
           toRemove.push(d.entity_id);
           return d;
         }
-        
-        // Still waiting - show as enabling
         return { ...d, firmware_disabled: false, enabling: true };
       }
-      
-      // If enable expired, override backend's enabling flag
       if (hasExpired && d.enabling) {
         return { ...d, enabling: false, firmware_unavailable: true };
       }
-      
-      // Trust the backend's enabling flag
       return d;
     });
-    
-    // Clean up completed enables after mapping
+
     if (toRemove.length > 0) {
       toRemove.forEach(entityId => {
         const info = this._pendingEnables.get(entityId);
@@ -482,25 +447,18 @@ _expireUpdating(entityId) {
       this._pendingEnables = new Map(this._pendingEnables);
       this._savePendingToStorage();
     }
-    
     return result;
   }
 
   async _loadDevices() {
     try {
       const res = await this.hass.callWS({ type: "esphome_update_manager/devices" });
-      const newDevices = res.devices || [];
+      this.devices = [...(res.devices || [])];
       this._isMixedSetup = res.is_mixed_setup || false;
-      
-      // Force new array reference to trigger LitElement update
-      this.devices = [...newDevices];
-      
       const merged = this._mergedDevices();
       const hasEnabling = merged.some((d) => d.enabling) || this._pendingEnables.size > 0;
       if (hasEnabling && !this._enablingPollTimer) this._startEnablingPoll();
       else if (!hasEnabling && this._enablingPollTimer) this._stopEnablingPoll();
-      
-      // Force re-render
       this.requestUpdate();
     } catch (e) {
       console.error("Failed to load devices", e);
@@ -534,9 +492,6 @@ _expireUpdating(entityId) {
         auto_update_enabled: this._autoUpdateEnabled,
         stop_addon_during_update: this._stopAddonDuringUpdate,
       });
-      
-      // If auto-update was just enabled, poll status after a short delay
-      // to catch any immediate updates (success or failure)
       if (this._autoUpdateEnabled) {
         setTimeout(async () => {
           await this._pollStatus();
@@ -565,18 +520,12 @@ _expireUpdating(entityId) {
   }
 
   _startBackgroundStatusCheck() {
-    // Check every 5 seconds if an update was started from backend
     if (this._backgroundCheckTimer) return;
-    
     this._backgroundCheckTimer = setInterval(async () => {
-      // Check URL for show_log parameter (in case notification was clicked)
       this._checkUrlForLogParam();
-      
       try {
         const res = await this.hass.callWS({ type: "esphome_update_manager/status" });
-        
         if (res.running && !this.running) {
-          // Backend started an update, sync our state
           this.running = true;
           this.results = res.results || [];
           this._restoreUpdatingState();
@@ -584,10 +533,10 @@ _expireUpdating(entityId) {
           this._loadDevices();
           this.requestUpdate();
         } else if (!res.running && this.running) {
-          // Backend finished but we still think it's running
           this.running = false;
           this.results = res.results || [];
           this._clearAllUpdatingTimers();
+          this._forceInstallingIds = new Map();
           this._cancelling = false;
           this.selected.clear();
           await this._loadDevices();
@@ -595,15 +544,12 @@ _expireUpdating(entityId) {
           this.requestUpdate();
         }
       } catch (e) {
-        // Ignore errors
       }
     }, 5000);
   }
-
   async _pollStatus() {
     try {
       const res = await this.hass.callWS({ type: "esphome_update_manager/status" });
-      
       this.running = res.running;
       this.results = res.results || [];
       this._phase = res.phase || "idle";
@@ -615,24 +561,36 @@ _expireUpdating(entityId) {
             .filter((r) => r.status === "running" || r.status === "queued")
             .map((r) => r.entity_id)
         );
-        
         for (const [entityId, info] of this._updatingIds) {
           if (!activeIds.has(entityId)) {
             if (info.timeoutId) clearTimeout(info.timeoutId);
             this._updatingIds.delete(entityId);
           } else {
             const result = this.results.find((r) => r.entity_id === entityId);
-            
             if (result?.status === "running" && !info.isRunning) {
               if (info.timeoutId) clearTimeout(info.timeoutId);
-              const timeoutId = setTimeout(() => {
-                this._expireUpdating(entityId);
-              }, UPDATING_TIMEOUT_MS);
+              const timeoutId = setTimeout(() => this._expireUpdating(entityId), UPDATING_TIMEOUT_MS);
               this._updatingIds.set(entityId, { startedAt: Date.now(), timeoutId, isRunning: true });
             }
           }
         }
         this._updatingIds = new Map(this._updatingIds);
+      }
+
+      if (this._forceInstallingIds.size > 0) {
+        const activeDeviceIds = new Set(
+          this.results
+            .filter((r) => r.status === "running" || r.status === "queued")
+            .map((r) => r.device_id)
+        );
+        const merged = this._mergedDevices();
+        for (const [entityId] of this._forceInstallingIds) {
+          const device = merged.find(d => d.entity_id === entityId);
+          if (!device || !activeDeviceIds.has(device.device_id)) {
+            this._forceInstallingIds.delete(entityId);
+          }
+        }
+        this._forceInstallingIds = new Map(this._forceInstallingIds);
       }
 
       if (!this.running && this._pollInterval) {
@@ -642,7 +600,9 @@ _expireUpdating(entityId) {
         this._cancelling = false;
         this._phase = "idle";
         this._addonName = null;
+        this._isForceInstallRun = false;
         this.selected.clear();
+        this._forceInstallingIds = new Map();
         await this._loadDevices();
         await this._loadAddonInfo();
         this.requestUpdate();
@@ -650,8 +610,8 @@ _expireUpdating(entityId) {
     } catch (e) {
       console.error("_pollStatus error:", e);
     }
-}
-
+  }
+  
   // ── Actions ─────────────────────────────────────────────────────
 
   _toggleSelect(entityId) {
@@ -662,39 +622,46 @@ _expireUpdating(entityId) {
 
   _selectAll() {
     const merged = this._mergedDevices();
-    const selectable = merged.filter((d) => this._canSelect(d));
-    if (selectable.length > 0 && this.selected.size === selectable.length) {
-      this.selected.clear();
+    if (this._forceInstallMode) {
+      const selectable = merged.filter((d) => this._canForceSelect(d));
+      if (selectable.length > 0 && this.selected.size === selectable.length) {
+        this.selected.clear();
+      } else {
+        this.selected.clear();
+        selectable.forEach((d) => this.selected.add(d.entity_id));
+      }
     } else {
-      this.selected.clear();
-      selectable.forEach((d) => this.selected.add(d.entity_id));
+      const selectable = merged.filter((d) => this._canSelect(d));
+      if (selectable.length > 0 && this.selected.size === selectable.length) {
+        this.selected.clear();
+      } else {
+        this.selected.clear();
+        selectable.forEach((d) => this.selected.add(d.entity_id));
+      }
     }
     this.requestUpdate();
   }
 
   async _enableEntity(entityId) {
-      // Clear expired state if user tries again
-      this._expiredEnables.delete(entityId);
-      this._savePendingToStorage();  // Save the cleared expired state
-      
-      const timeoutId = setTimeout(() => this._expireEnabling(entityId), ENABLING_TIMEOUT_MS);
+    this._expiredEnables.delete(entityId);
+    this._savePendingToStorage();
+    const timeoutId = setTimeout(() => this._expireEnabling(entityId), ENABLING_TIMEOUT_MS);
+    this._pendingEnables = new Map(this._pendingEnables);
+    this._pendingEnables.set(entityId, { startedAt: Date.now(), timeoutId });
+    this._savePendingToStorage();
+    this.requestUpdate();
+    if (!this._enablingPollTimer) this._startEnablingPoll();
+    try {
+      await this.hass.callWS({ type: "esphome_update_manager/enable_entity", entity_id: entityId });
+    } catch (e) {
+      const info = this._pendingEnables.get(entityId);
+      if (info?.timeoutId) clearTimeout(info.timeoutId);
+      this._pendingEnables.delete(entityId);
       this._pendingEnables = new Map(this._pendingEnables);
-      this._pendingEnables.set(entityId, { startedAt: Date.now(), timeoutId });
       this._savePendingToStorage();
+      this._addLocalResult(entityId, "failed", "Enable failed: " + e.message);
       this.requestUpdate();
-      if (!this._enablingPollTimer) this._startEnablingPoll();
-
-      try {
-        await this.hass.callWS({ type: "esphome_update_manager/enable_entity", entity_id: entityId });
-      } catch (e) {
-        const info = this._pendingEnables.get(entityId);
-        if (info?.timeoutId) clearTimeout(info.timeoutId);
-        this._pendingEnables.delete(entityId);
-        this._pendingEnables = new Map(this._pendingEnables);
-        this._savePendingToStorage();
-        this._addLocalResult(entityId, "failed", "Enable failed: " + e.message);
-        this.requestUpdate();
-      }
+    }
   }
 
   _getStopAddonSlug() {
@@ -711,15 +678,15 @@ _expireUpdating(entityId) {
       if (device) {
         versionInfo[entityId] = {
           from: device.current_version || "unknown",
-          to: device.latest_version || "unknown",
+          to: null,
+          name: device.name || entityId,
+          device_id: device.device_id || null,
         };
       }
-
       const timeoutId = setTimeout(() => this._expireUpdating(entityId), UPDATING_TIMEOUT_MS);
       this._updatingIds = new Map(this._updatingIds);
       this._updatingIds.set(entityId, { startedAt: Date.now(), timeoutId });
       this.requestUpdate();
-
       await this.hass.callWS({
         type: "esphome_update_manager/start",
         entity_ids: [entityId],
@@ -729,7 +696,6 @@ _expireUpdating(entityId) {
       this.running = true;
       this._startStatusPolling();
     } catch (e) {
-      console.error("[ESPHome Update Manager] _updateSingle error:", e);
       const info = this._updatingIds.get(entityId);
       if (info?.timeoutId) clearTimeout(info.timeoutId);
       this._updatingIds.delete(entityId);
@@ -742,7 +708,6 @@ _expireUpdating(entityId) {
   async _startBatchUpdate() {
     if (this.selected.size === 0) return;
     const ids = [...this.selected];
-
     try {
       const versionInfo = {};
       ids.forEach(id => {
@@ -750,17 +715,17 @@ _expireUpdating(entityId) {
         if (device) {
           versionInfo[id] = {
             from: device.current_version || "unknown",
-            to: device.latest_version || "unknown",
+            to: null,
+            name: device.name || id,
+            device_id: device.device_id || null,
           };
         }
       });
-
       this._updatingIds = new Map(this._updatingIds);
       ids.forEach((id) => {
         this._updatingIds.set(id, { startedAt: null, timeoutId: null, isRunning: false });
       });
       this.requestUpdate();
-
       await this.hass.callWS({
         type: "esphome_update_manager/start",
         entity_ids: ids,
@@ -770,7 +735,6 @@ _expireUpdating(entityId) {
       this.running = true;
       this._startStatusPolling();
     } catch (e) {
-      console.error("[ESPHome Update Manager] _startBatchUpdate error:", e);
       ids.forEach((id) => {
         this._updatingIds.delete(id);
         this._addLocalResult(id, "failed", "Batch update failed: " + String(e?.message || e));
@@ -788,7 +752,6 @@ _expireUpdating(entityId) {
     } catch (e) {
       console.error("Cancel failed:", e);
     }
-    // _cancelling will be reset when running becomes false
   }
 
   async _clearResults() {
@@ -810,6 +773,7 @@ _expireUpdating(entityId) {
         clearInterval(this._pollInterval);
         this._pollInterval = null;
         this._clearAllUpdatingTimers();
+        this._forceInstallingIds = new Map();
         this._cancelling = false;
         this.selected.clear();
         await this._loadDevices();
@@ -817,6 +781,75 @@ _expireUpdating(entityId) {
         this.requestUpdate();
       }
     }, 3000);
+  }
+
+  // ── Force Install ───────────────────────────────────────────────
+
+  _enterForceInstallMode() {
+    this._forceInstallMode = true;
+    this.selected.clear();
+    this.requestUpdate();
+  }
+
+  _exitForceInstallMode() {
+    this._forceInstallMode = false;
+    this.selected.clear();
+    this.requestUpdate();
+  }
+
+  async _startForceInstall() {
+    if (this.selected.size === 0) return;
+
+    const merged = this._mergedDevices();
+    const selectedDevices = merged.filter(d => this.selected.has(d.entity_id));
+    const forceInstallDevices = selectedDevices
+      .filter(d => d.device_id)
+      .map(d => ({
+        entity_id: `force:${d.name}`,
+        device_id: d.device_id,
+        name: d.name,
+        from_version: d.sw_version_raw || d.current_version || null,
+        to_version: null,
+      }));
+
+    if (forceInstallDevices.length === 0) {
+      alert("No valid devices selected");
+      return;
+    }
+
+    selectedDevices.forEach((d) => {
+      this._forceInstallingIds.set(d.entity_id, { startedAt: null, timeoutId: null, isRunning: false });
+    });
+    this.requestUpdate();
+
+    try {
+      await this.hass.callWS({
+        type: "esphome_update_manager/start",
+        entity_ids: forceInstallDevices.map(d => d.entity_id),
+        force_install_devices: forceInstallDevices,
+        stop_addon_slug: this._getStopAddonSlug(),
+      });
+      this.running = true;
+      this._isForceInstallRun = true;
+      this._forceInstallMode = false;
+      this.selected.clear();
+      this._startStatusPolling();
+      this.requestUpdate();
+    } catch (e) {
+      console.error("Force install failed:", e);
+      this._localResults = [
+        ...this._localResults,
+        {
+          entity_id: "Force Install",
+          status: "failed",
+          error: e.message || "Unknown error",
+          started_at: null,
+          finished_at: new Date().toISOString(),
+          is_force_install: true,
+        },
+      ];
+      this.requestUpdate();
+    }
   }
 
   // ── Rendering helpers ───────────────────────────────────────────
@@ -836,67 +869,39 @@ _expireUpdating(entityId) {
   }
 
   _getStatusText() {
-    if (this._cancelling) {
-      return "Cancelling…";
-    }
+    if (this._cancelling) return "Cancelling…";
+    
+    const isForceInstall = this._isForceInstallRun || this.results.some(r => r.is_force_install);
     
     switch (this._phase) {
-      case "stopping_addon":
-        return `Stopping ${this._addonName || "add-on"}…`;
-      case "starting_addon":
-        return `Starting ${this._addonName || "add-on"}…`;
-      case "updating":
-        return "Updating…";
+      case "stopping_addon": return `Stopping ${this._addonName || "add-on"}…`;
+      case "starting_addon": return `Starting ${this._addonName || "add-on"}…`;
       default:
-        return "Updating…";
+        return isForceInstall ? "Compiling and uploading yaml…" : "Updating…";
     }
   }
 
   _getAddonStatusDisplay() {
-    // During update phases, show the transitional states
     if (this.running && this._stopAddonDuringUpdate) {
-      if (this._phase === "stopping_addon") {
-        return { text: "● Stopping", cls: "addon-stopping" };
-      }
-      if (this._phase === "starting_addon") {
-        return { text: "● Starting", cls: "addon-starting" };
-      }
-      // During updating phase, addon is stopped (if it was running)
-      if (this._phase === "updating" && this._addonName) {
-        return { text: "● Stopped", cls: "addon-stopped" };
-      }
+      if (this._phase === "stopping_addon") return { text: "● Stopping", cls: "addon-stopping" };
+      if (this._phase === "starting_addon") return { text: "● Starting", cls: "addon-starting" };
+      if (this._phase === "updating" && this._addonName) return { text: "● Stopped", cls: "addon-stopped" };
     }
-    
-    // Default: show actual running state
-    if (this._addonInfo?.running) {
-      return { text: "● Running", cls: "addon-running" };
-    }
+    if (this._addonInfo?.running) return { text: "● Running", cls: "addon-running" };
     return { text: "● Stopped", cls: "addon-stopped" };
   }
 
   _getDeviceButton(d) {
+    const isForceInstalling = this._forceInstallingIds.has(d.entity_id);
+    if (isForceInstalling) return { label: "Installing…", cls: "btn-updating", disabled: true, action: null, spinner: true };
     const isUpdating = this._isUpdatingPending(d.entity_id) || d.in_progress;
-    if (d.online === false) {
-      return { label: "Offline", cls: "btn-offline", disabled: true, action: null, spinner: false };
-    }
-    if (d.enabling) {
-      return { label: "Enabling…", cls: "btn-enabling", disabled: true, action: null, spinner: true };
-    }
-    if (d.firmware_disabled) {
-      return { label: "Enable", cls: "btn-enable", disabled: false, action: "enable", spinner: false };
-    }
-    if (d.firmware_unavailable) {
-      return { label: "Unavailable", cls: "btn-unavailable", disabled: true, action: null, spinner: false };
-    }
-    if (isUpdating) {
-      return { label: "Updating…", cls: "btn-updating", disabled: true, action: null, spinner: true };
-    }
-    if (d.update_available) {
-      return { label: "Update", cls: "btn-update", disabled: false, action: "update", spinner: false };
-    }
-    if (d.skipped) {
-      return { label: "Skipped", cls: "btn-skipped", disabled: true, action: null, spinner: false };
-    }
+    if (d.online === false) return { label: "Offline", cls: "btn-offline", disabled: true, action: null, spinner: false };
+    if (d.enabling) return { label: "Enabling…", cls: "btn-enabling", disabled: true, action: null, spinner: true };
+    if (d.firmware_disabled) return { label: "Enable", cls: "btn-enable", disabled: false, action: "enable", spinner: false };
+    if (d.firmware_unavailable) return { label: "Unavailable", cls: "btn-unavailable", disabled: true, action: null, spinner: false };
+    if (isUpdating) return { label: "Updating…", cls: "btn-updating", disabled: true, action: null, spinner: true };
+    if (d.update_available) return { label: "Update", cls: "btn-update", disabled: false, action: "update", spinner: false };
+    if (d.skipped) return { label: "Skipped", cls: "btn-skipped", disabled: true, action: null, spinner: false };
     return { label: "Up to date", cls: "btn-uptodate", disabled: true, action: null, spinner: false };
   }
 
@@ -904,12 +909,10 @@ _expireUpdating(entityId) {
     const btn = this._getDeviceButton(d);
     if (btn.action === "enable") {
       this._enableEntity(d.entity_id).catch(e => {
-        console.error("[ESPHome Update Manager] Enable error:", e);
         this._addLocalResult(d.entity_id, "failed", "Enable failed to start: " + String(e?.message || e));
       });
     } else if (btn.action === "update") {
       this._updateSingle(d.entity_id).catch(e => {
-        console.error("[ESPHome Update Manager] Update error:", e);
         this._addLocalResult(d.entity_id, "failed", "Update failed to start: " + String(e?.message || e));
       });
     }
@@ -920,6 +923,16 @@ _expireUpdating(entityId) {
       d.update_available &&
       !d.firmware_disabled &&
       !d.firmware_unavailable &&
+      !d.enabling &&
+      d.online !== false &&
+      !this._isUpdatingPending(d.entity_id) &&
+      !d.in_progress &&
+      d.entity_id
+    );
+  }
+
+  _canForceSelect(d) {
+    return (
       !d.enabling &&
       d.online !== false &&
       !this._isUpdatingPending(d.entity_id) &&
@@ -947,7 +960,6 @@ _expireUpdating(entityId) {
         padding: 0;
         font-family: var(--paper-font-body1_-_font-family, "Roboto", sans-serif);
       }
-      /* App toolbar (HA style) */
       .app-toolbar {
         display: flex;
         align-items: center;
@@ -977,32 +989,18 @@ _expireUpdating(entityId) {
         justify-content: center;
         border-radius: 50%;
       }
-      .sidebar-toggle:hover {
-        background: rgba(255, 255, 255, 0.1);
-      }
-      .sidebar-toggle svg {
-        width: 24px;
-        height: 24px;
-        fill: currentColor;
-      }
-      h1 { 
-        margin: 0 0 16px; 
+      .sidebar-toggle:hover { background: rgba(255,255,255,0.1); }
+      .sidebar-toggle svg { width: 24px; height: 24px; fill: currentColor; }
+      h1 {
+        margin: 0 0 8px;
         padding: 8px 16px;
         background: var(--secondary-background-color, #e0e0e0);
         display: flex;
         align-items: center;
       }
-      .header-spacer {
-        flex: 1;
-      }
-      .content {
-        padding: 0 16px 16px;
-      }
-
-      /* Header menu */
-      .header-menu-container {
-        position: relative;
-      }
+      .header-spacer { flex: 1; }
+      .content { padding: 0 16px 16px; }
+      .header-menu-container { position: relative; }
       .menu-btn {
         background: none;
         border: none;
@@ -1019,16 +1017,14 @@ _expireUpdating(entityId) {
         justify-content: center;
         line-height: 1;
       }
-      .menu-btn:hover {
-        background: rgba(0, 0, 0, 0.2);
-      }
+      .menu-btn:hover { background: rgba(0,0,0,0.2); }
       .header-menu {
         position: absolute;
         top: 100%;
         right: 0;
         background: var(--card-background-color, #fff);
         border-radius: 0;
-        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+        box-shadow: 0 4px 12px rgba(0,0,0,0.3);
         min-width: 200px;
         z-index: 100;
       }
@@ -1045,15 +1041,9 @@ _expireUpdating(entityId) {
         border-bottom: 1px solid var(--divider-color, #e0e0e0);
         border-radius: 0;
       }
-      .menu-item:last-child {
-        border-bottom: none;
-      }
-      .menu-item:hover {
-        background: var(--secondary-background-color, #f5f5f5);
-      }
-      .menu-item.current-log {
-        font-size: 0.6em;
-      }
+      .menu-item:last-child { border-bottom: none; }
+      .menu-item:hover { background: var(--secondary-background-color, #f5f5f5); }
+      .menu-item.current-log { font-size: 0.6em; }
       .menu-section-title {
         padding: 8px 16px 4px;
         font-size: 0.5em;
@@ -1061,35 +1051,28 @@ _expireUpdating(entityId) {
         color: var(--secondary-text-color, #666);
         letter-spacing: 0.5px;
       }
-      .menu-divider {
-        height: 1px;
-        background: var(--divider-color, #e0e0e0);
-        margin: 4px 0;
-      }
+      .menu-divider { height: 1px; background: var(--divider-color, #e0e0e0); margin: 4px 0; }
       .no-backups {
         padding: 12px 16px;
         color: var(--secondary-text-color, #666);
         font-style: italic;
         font-size: 0.5em;
       }
-      .name.failed {
-        color: #f44336;
-      }
-      .toolbar {
+      .name.failed { color: #f44336; }
+      .toolbar { 
         display: flex; align-items: center; gap: 8px;
-        margin: 16px 0; padding: 8px 12px;
-        background: #ccc; border-radius: 8px;
+        margin: 8px 0; padding: 6px 12px 6px 20px;
+        background: #aaa; border-radius: 8px;
       }
-      .toolbar-info { flex: 1; color: #555; font-size: 0.9em; }
-
+      .toolbar.force-mode { background: #aaa; }
+      .toolbar-info { flex: 1; color: #333; font-size: 0.9em; }
+      .toolbar.force-mode .toolbar-info { color: #fff; }
       .device-list { margin: 0; }
       .device-row {
         display: flex; align-items: center; gap: 12px;
         padding: 10px 20px; border-bottom: 1px solid #555;
-        background: rgba(128, 128, 128, 0.1);
+        background: rgba(128,128,128,0.1);
       }
-
-      /* Header row */
       .device-list-header {
         border-bottom: 1.5px solid var(--secondary-text-color, #888);
         font-size: 1em;
@@ -1104,15 +1087,12 @@ _expireUpdating(entityId) {
         min-width: 110px;
         padding: 6px 16px;
       }
-
       .online-status { flex: 0 0 20px; text-align: center; font-size: 0.75em; }
       .version { color: #666; font-size: 0.85em; white-space: nowrap; }
       .version .arrow { color: #4caf50; font-weight: bold; }
-
       .checkbox-col { flex: 0 0 24px; display: flex; align-items: center; justify-content: center; }
       .checkbox-col input { margin: 0; }
       .checkbox-col input:disabled { opacity: 0; }
-
       button {
         padding: 6px 16px; border: none; border-radius: 16px;
         cursor: pointer; font-size: 0.85em; font-weight: 500;
@@ -1122,7 +1102,6 @@ _expireUpdating(entityId) {
         box-sizing: border-box;
       }
       button:disabled { cursor: default; }
-
       .btn-uptodate { background: #4caf50; color: white; opacity: 0.8; }
       .btn-enable { background: #ff9800; color: white; }
       .btn-enable:hover:not(:disabled) { background: #f57c00; }
@@ -1133,16 +1112,27 @@ _expireUpdating(entityId) {
       .btn-unavailable { background: #58a9eb; color: white; opacity: 0.8; }
       .btn-offline { background: #666; color: white; opacity: 0.8; }
       .btn-skipped { background: #9c27b0; color: white; opacity: 0.8; }
-
-      .btn-select-all { background: #666; color: white; }
-      .btn-select-all:hover { background: #555; }
+      .btn-select-all {
+        background: transparent;
+        padding: 4px 0px;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      .btn-select-all input[type="checkbox"] { width: auto; height: auto; cursor: pointer; }
+      .btn-select-all input[type="checkbox"]:disabled { opacity: 0.6; filter: brightness(2); }
       .btn-batch-update { background: #2196f3; color: white; }
       .btn-batch-update:hover:not(:disabled) { background: #1976d2; }
-      
       .btn-cancel { background: #f44336; color: white; }
       .btn-cancel:hover:not(:disabled) { background: #c62828; }
       .btn-cancel:disabled { opacity: 0.7; cursor: not-allowed; }
-
+      .btn-force-mode { background: #4caf50; color: white; }
+      .btn-force-mode:hover { background: #3e9140; }
+      .btn-force-install { background: #4caf50; color: white; }
+      .btn-force-install:hover:not(:disabled) { background: #3e9140; }
+      .btn-cancel-mode { background: #666; color: white; }
+      .btn-cancel-mode:hover { background: #555; }
       .spinner {
         display: inline-block;
         width: 12px; height: 12px;
@@ -1152,26 +1142,21 @@ _expireUpdating(entityId) {
         animation: spin 0.8s linear infinite;
       }
       @keyframes spin { to { transform: rotate(360deg); } }
-
-      /* Addon option */
       .addon-option {
         display: flex; align-items: center; gap: 8px;
-        margin: 8px 0; padding: 8px 12px;
+        margin: 8px 0; padding: 8px 24px;
         background: #2a2a2a; border-radius: 8px;
         font-size: 0.9em; color: #ccc;
       }
       .addon-option input[type="checkbox"] { margin: 0; }
       .addon-option .addon-name { color: #ff9800; font-weight: 500; }
       .addon-option .addon-status { margin-left: auto; font-size: 0.85em; }
-      .addon-running { color: #4caf50; margin-right: 2px; }
-      .addon-stopped { color: #f44336; margin-right: 2px; }
-      .addon-stopping { color: #ff9800; margin-right: 2px; }
-      .addon-starting { color: #ff9800; margin-right: 2px; }
-
+      .addon-running { color: #4caf50; }
+      .addon-stopped { color: #f44336; }
+      .addon-stopping { color: #ff9800; }
+      .addon-starting { color: #ff9800; }
       .results { margin-top: 24px; }
-      .results-header {
-        display: flex; align-items: center; gap: 12px;
-      }
+      .results-header { display: flex; align-items: center; gap: 12px; }
       .results-header h3 { margin: 0; flex: 1; }
       .btn-clear {
         background: none; color: #f44336; border: 1px solid #888;
@@ -1187,113 +1172,65 @@ _expireUpdating(entityId) {
         display: flex; align-items: center; gap: 8px;
         padding: 4px 0;
       }
-      .summary { color: #666; font-size: 0.9em; margin: 8px 0; }
-
-      /* Log Popup */
+      .device-summary { color: #777; font-size: 0.9em; margin: 4px 0 8px; padding: 0 4px; }
       .log-overlay {
-        position: fixed;
-        top: 0;
-        left: 0;
-        right: 0;
-        bottom: 0;
-        background: rgba(0, 0, 0, 0.7);
-        display: flex;
-        align-items: center;
-        justify-content: center;
+        position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+        background: rgba(0,0,0,0.7);
+        display: flex; align-items: center; justify-content: center;
         z-index: 1000;
       }
       .log-popup {
         background: var(--card-background-color, #1c1c1c);
         border-radius: 12px;
-        width: 90%;
-        max-width: 700px;
-        max-height: 80vh;
-        display: flex;
-        flex-direction: column;
-        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+        width: 90%; max-width: 700px; max-height: 80vh;
+        display: flex; flex-direction: column;
+        box-shadow: 0 4px 20px rgba(0,0,0,0.5);
       }
       .log-popup-header {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
+        display: flex; align-items: center; justify-content: space-between;
         padding: 16px 20px;
         border-bottom: 1px solid #444;
       }
-      .log-popup-header h2 {
-        margin: 0;
-        font-size: 1.2em;
-      }
+      .log-popup-header h2 { margin: 0; font-size: 1.2em; }
       .log-popup-close {
-        background: none;
-        border: none;
-        color: #999;
-        font-size: 1.5em;
-        cursor: pointer;
-        padding: 0;
-        line-height: 1;
+        background: none; border: none; color: #999;
+        font-size: 1.5em; cursor: pointer; padding: 0; line-height: 1;
       }
-      .log-popup-close:hover {
-        color: #f44336;
-      }
-      .log-popup-content {
-        flex: 1;
-        overflow: auto;
-        padding: 16px 20px;
-      }
+      .log-popup-close:hover { color: #f44336; }
+      .log-popup-content { flex: 1; overflow: auto; padding: 16px 20px; }
       .log-popup-content pre {
-        margin: 0;
-        white-space: pre-wrap;
-        word-wrap: break-word;
-        font-family: monospace;
-        font-size: 0.85em;
-        line-height: 1.5;
+        margin: 0; white-space: pre-wrap; word-wrap: break-word;
+        font-family: monospace; font-size: 0.85em; line-height: 1.5;
         color: var(--primary-text-color, #111);
       }
-
-      /* Name tooltip */
       .name-tooltip {
         position: fixed;
-        background: #333;
-        color: white;
-        padding: 8px 12px;
-        border-radius: 8px;
-        font-size: 0.9em;
-        z-index: 1000;
-        max-width: 80vw;
-        word-wrap: break-word;
+        background: #333; color: white;
+        padding: 8px 12px; border-radius: 8px;
+        font-size: 0.9em; z-index: 1000;
+        max-width: 80vw; word-wrap: break-word;
         box-shadow: 0 2px 10px rgba(0,0,0,0.3);
         transform: translate(-50%, -100%) translateY(-10px);
         pointer-events: none;
       }
-
       .name {
-        flex: 1;
-        font-weight: 500;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
+        flex: 1; font-weight: 500;
+        overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
         min-width: 0;
       }
-
       @media (max-width: 600px) and (pointer: coarse) {
-        .content {
-          padding-left: 0px;
-          padding-right: 0px;
+        .btn-select-all input[type="checkbox"] {
+          width: 18px;
+          height: 18px;
+          min-width: 18px;
+          min-height: 18px;
         }
-        .device-row {
-          padding-left: 10px;
-          padding-right: 10px;
-        }
-        .toolbar {
-          margin-left: 0;
-        }
-        .result-row {
-          padding-left: 10px;
-          padding-right: 10px;
-        }
-        .name {
-          cursor: pointer;
-        }
+        .content { padding-left: 0; padding-right: 0; }
+        .device-row { padding-left: 10px; padding-right: 10px; }
+        .toolbar { margin-left: 0; padding-left: 11px; }
+        .addon-option { padding-left: 14px; padding-right: 14px; }
+        .result-row { padding-left: 10px; padding-right: 10px; }
+        .name { cursor: pointer; }
       }
     `;
   }
@@ -1304,11 +1241,12 @@ _expireUpdating(entityId) {
     const merged = this._mergedDevices();
     const allResults = this._allResults;
     const selectableCount = merged.filter((d) => this._canSelect(d)).length;
+    const forceSelectableCount = merged.filter((d) => this._canForceSelect(d)).length;
     const onlineCount = merged.filter((d) => d.online === true).length;
     const offlineCount = merged.filter((d) => d.online === false).length;
     const unknownCount = merged.filter((d) => d.online === null).length;
-
     const showAddonOption = this._addonInfo?.installed;
+    const showToolbar = selectableCount > 0 || this.running || this._forceInstallMode || forceSelectableCount > 0;
 
     return html`
       ${this._tooltipName ? html`
@@ -1329,23 +1267,19 @@ _expireUpdating(entityId) {
           <span class="title">ESPHome Update Manager</span>
         </div>
       ` : ""}
-      
+
       <h1>
         <img src="/local/esphome-update-manager/logo.png"
             style="height: 40px; vertical-align: middle; margin-right: 12px;">
         ESPHome Update Manager
-        ${this._version ? html`<span class="version-badge">v${this._version}</span>` : ""}
         <span class="header-spacer"></span>
         <div class="header-menu-container">
           <button class="menu-btn" @click=${this._toggleMenu} title="View logs">⋮</button>
           ${this._showMenu ? this._renderMenu() : ""}
         </div>
       </h1>
+
       <div class="content">
-        <div class="summary">
-          ${merged.length} devices
-          — ${onlineCount} online, ${offlineCount} offline${unknownCount > 0 ? html`, ${unknownCount} unknown` : ""}
-        </div>
 
         ${showAddonOption ? html`
           <div class="addon-option">
@@ -1356,7 +1290,7 @@ _expireUpdating(entityId) {
                 this._stopAddonDuringUpdate = e.target.checked;
                 this._saveAutoUpdateSettings();
               }} />
-            <span>Stop <span class="addon-name">${this._addonInfo.name}</span> during updates</span>
+            <span>Stop <span class="addon-name">${this._addonInfo.name}</span> during jobs</span>
             <span class="addon-status ${this._getAddonStatusDisplay().cls}">${this._getAddonStatusDisplay().text}</span>
           </div>
         ` : ""}
@@ -1374,36 +1308,68 @@ _expireUpdating(entityId) {
             : html`<span class="addon-status addon-stopped">● Disabled</span>`
           }
         </div>
-
-        ${selectableCount > 0 || this.running ? html`
-          <div class="toolbar">
+        
+        ${showToolbar ? html`
+          <div class="toolbar ${this._forceInstallMode ? 'force-mode' : ''}">
             ${this.running ? html`
-              <button class="btn-cancel" 
+              <label class="btn-select-all" style="pointer-events: none;">
+                <input type="checkbox" disabled .checked=${false} .indeterminate=${false}>
+              </label>
+              <button class="btn-cancel"
                 ?disabled=${this._cancelling}
                 @click=${() => this._cancelUpdates().catch(e => {
-                  console.error("[ESPHome Update Manager] Cancel error:", e);
-                  this._addLocalResult("Cancel", "failed", "Cancel failed to start: " + String(e?.message || e));
+                  this._addLocalResult("Cancel", "failed", "Cancel failed: " + String(e?.message || e));
                 })}>
                 ${this._cancelling ? html`<span class="spinner"></span>` : ""}
                 ${this._cancelling ? "Cancelling…" : "⏹ Cancel"}
               </button>
               <span class="toolbar-info">${this._getStatusText()}</span>
-            ` : html`
-              <button class="btn-select-all" @click=${this._selectAll}>
-                ${this.selected.size === selectableCount ? "Deselect all" : "Select all"}
+            ` : this._forceInstallMode ? html`
+              <label class="btn-select-all"
+                style="${forceSelectableCount === 0 ? 'pointer-events: none;' : ''}">
+                <input type="checkbox"
+                  .checked=${this.selected.size === forceSelectableCount && forceSelectableCount > 0}
+                  .indeterminate=${this.selected.size > 0 && this.selected.size < forceSelectableCount}
+                  ?disabled=${forceSelectableCount === 0}
+                  @change=${this._selectAll}>
+              </label>
+              <button class="btn-force-install"
+                ?disabled=${this.selected.size === 0}
+                @click=${this._startForceInstall}>
+                ▶ Force Install (${this.selected.size})
               </button>
+              <button class="btn-cancel-mode" @click=${this._exitForceInstallMode}>
+                ✕ Cancel
+              </button>
+            ` : html`
+              <label class="btn-select-all"
+                style="${selectableCount === 0 ? 'pointer-events: none;' : ''}">
+                <input type="checkbox"
+                  .checked=${this.selected.size === selectableCount && selectableCount > 0}
+                  .indeterminate=${this.selected.size > 0 && this.selected.size < selectableCount}
+                  ?disabled=${selectableCount === 0}
+                  @change=${this._selectAll}>
+              </label>
               <button class="btn-batch-update"
                 ?disabled=${this.selected.size === 0}
                 @click=${() => this._startBatchUpdate().catch(e => {
-                  console.error("[ESPHome Update Manager] Batch update error:", e);
-                  this._addLocalResult("Batch update", "failed", "Batch update failed to start: " + String(e?.message || e));
+                  this._addLocalResult("Batch update", "failed", "Batch update failed: " + String(e?.message || e));
                 })}>
                 ▶ Update selected (${this.selected.size})
               </button>
-              <span class="toolbar-info">${selectableCount} device${selectableCount !== 1 ? "s" : ""} can be updated</span>
+              <button class="btn-force-mode" @click=${this._enterForceInstallMode}>
+                Force Install
+              </button>
             `}
           </div>
         ` : ""}
+
+          <div class="device-summary">
+            ${this._forceInstallMode
+              ? `${forceSelectableCount} device(s) available for force install`
+              : `${merged.length} devices — ${onlineCount} online, ${offlineCount} offline${unknownCount > 0 ? `, ${unknownCount} unknown` : ""}${selectableCount > 0 ? ` — ${selectableCount} device${selectableCount !== 1 ? "s" : ""} can be updated` : " — No updates available"}`
+            }
+          </div>
 
         <div class="device-row device-list-header">
           <span class="checkbox-col"></span>
@@ -1432,7 +1398,7 @@ _expireUpdating(entityId) {
           <div class="menu-divider"></div>
           <div class="menu-section-title">Previous Logs</div>
           ${this._logBackups.map(backup => html`
-            <button class="menu-item" 
+            <button class="menu-item"
               @click=${() => this._openBackupLog(backup.filename, backup.display_name)}>
               📋 ${backup.display_name}
             </button>
@@ -1447,11 +1413,10 @@ _expireUpdating(entityId) {
 
   _renderDevice(d) {
     const btn = this._getDeviceButton(d);
-    const canSelect = this._canSelect(d);
+    const canSelect = this._forceInstallMode ? this._canForceSelect(d) : this._canSelect(d);
     const isOffline = d.online === false;
-    
-    const displayName = (this._isMixedSetup && d.is_external) 
-      ? `${d.name} (ext)` 
+    const displayName = (this._isMixedSetup && d.is_external)
+      ? `${d.name} (ext)`
       : d.name;
 
     return html`
@@ -1460,13 +1425,14 @@ _expireUpdating(entityId) {
           ${canSelect ? html`
             <input type="checkbox"
               .checked=${this.selected.has(d.entity_id)}
+              ?disabled=${this.running}
               @change=${() => this._toggleSelect(d.entity_id)} />
           ` : html`
             <input type="checkbox" disabled .checked=${false} />
           `}
         </span>
         <span class="online-status">${this._onlineIcon(d.online)}</span>
-        <span class="name ${d.failed ? 'failed' : ''}" 
+        <span class="name ${d.failed ? 'failed' : ''}"
           @click=${(e) => this._showNameTooltip(e, d.name)}
           title="${d.name}">
           ${displayName}
@@ -1487,20 +1453,23 @@ _expireUpdating(entityId) {
   }
 
   _renderResults(allResults) {
+    const hasUpdateResults = allResults.length > 0;
     return html`
       <div class="results">
         <div class="results-header">
           <h3>Results</h3>
           ${!this.running ? html`
-            <button class="btn-log" @click=${this._openLogPopup}>📄 View Log</button>
+            ${hasUpdateResults ? html`
+              <button class="btn-log" @click=${this._openLogPopup}>📄 View Log</button>
+            ` : ""}
             <button class="btn-clear" @click=${this._clearResults}>✕ Clear</button>
           ` : ""}
         </div>
         ${allResults.map((r) => html`
           <div class="result-row">
             <span>${this._statusIcon(r.status)}</span>
-            <span class="name">${r.entity_id}</span>
-            <span>${r.status}</span>
+            <span class="name">${r.name || r.entity_id}</span>
+            <span>${r.status}${r.is_force_install ? " (force)" : ""}</span>
             ${r.error ? html`<span style="color:red; font-size:0.85em">— ${r.error}</span>` : ""}
           </div>
         `)}
@@ -1531,30 +1500,13 @@ if (!customElements.get("esphome-update-panel")) {
   customElements.define("esphome-update-panel", ESPHomeUpdatePanel);
 }
 
-// ── Console version log ─────────────────────────────────────────────────
-
 (function() {
-  // Extract version from script URL (?v=x.x.x)
   const scripts = document.querySelectorAll('script[src*="esphome-update-panel"]');
   let version = "unknown";
-  
   for (const script of scripts) {
     const match = script.src.match(/[?&]v=([^&]+)/);
-    if (match) {
-      version = match[1];
-      break;
-    }
+    if (match) { version = match[1]; break; }
   }
-  
-  // Also check module imports
-  if (version === "unknown") {
-    const currentScript = document.currentScript;
-    if (currentScript?.src) {
-      const match = currentScript.src.match(/[?&]v=([^&]+)/);
-      if (match) version = match[1];
-    }
-  }
-  
   console.info(
     `%c  ESPHOME-UPDATE-MANAGER  %c  v${version}  `,
     "color: #fff; background: #039be5; font-weight: bold; padding: 2px 0;",
@@ -1562,20 +1514,15 @@ if (!customElements.get("esphome-update-panel")) {
   );
 })();
 
-// ── Auto reload ─────────────────────────────────────────────────
-
 (function() {
   let lastActiveTime = Date.now();
-  const INACTIVE_THRESHOLD = 300000; // 5 minutes
-
+  const INACTIVE_THRESHOLD = 300000;
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'hidden') {
       lastActiveTime = Date.now();
     }
-
     if (document.visibilityState === 'visible') {
       const inactiveTime = Date.now() - lastActiveTime;
-      const isOnPanel = window.location.pathname.includes('esphome-update-manager');
       if (inactiveTime > INACTIVE_THRESHOLD) {
         location.reload();
       }
