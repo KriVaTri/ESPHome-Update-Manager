@@ -168,6 +168,7 @@ Force Install recompiles the firmware via the ESPHome dashboard and uploads it v
 - You want to push a configuration change that does not change the firmware version
 - A device's project version in the YAML is higher than what is installed on the device
 - You want to force a clean reinstall of the current firmware
+- You want to update multiple devices in one batch — Force Install compiles and uploads all selected devices sequentially, without needing a firmware version bump. This is the most powerful feature of Force Install: push any change to any number of devices in one single operation.
 
 #### Via frontend
 
