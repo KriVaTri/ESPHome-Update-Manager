@@ -300,7 +300,7 @@ mode: single
 
 If the **VS Code Server** (Studio Code Server) add-on is installed, a checkbox appears:
 
-> ☑️ Stop **Studio Code Server** during updates to free memory — ● Running / ● Stopped
+> ☑️ Stop **Studio Code Server** during jobs — ● Running / ● Stopped
 
 - When checked, the add-on is automatically stopped before updates/force installs begin and restarted after all updates/force installs complete
 - The add-on is always restarted, even if updates are cancelled or fail
