@@ -172,17 +172,17 @@ Force Install recompiles the firmware via the ESPHome dashboard and uploads it v
 
 #### Via frontend
 
-1. Click **Force Install** in the toolbar (only visible when no update is running)
+1. Click **Force Install** in the toolbar
 2. The panel switches to Force Install mode — all online devices become selectable
-3. Select one or more devices using the checkboxes (or click **Select all**)
+3. Select one or more devices using the checkboxes (or click **Select all checkbox**)
 4. Click **▶ Force Install (n)**
 5. The integration compiles the firmware and uploads it via OTA for each selected device sequentially
 6. Progress and results are shown in real-time, just like a regular update
 7. Click **✕ Cancel** to exit Force Install mode without starting
 
-> **Note:** Force Install always recompiles the firmware, even if nothing has changed. This may take a few minutes per device depending on your hardware.
+> **Note:** Force Install always recompiles the firmware, even if nothing has changed.
 
-#### Via service: `force_install`
+#### Via service: `ESPHome Yaml Force Install`
 
 Force Install can also be triggered via a Home Assistant service call, useful for automations:
 
