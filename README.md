@@ -302,10 +302,9 @@ If the **VS Code Server** (Studio Code Server) add-on is installed, a checkbox a
 
 > ☑️ Stop **Studio Code Server** during updates to free memory — ● Running / ● Stopped
 
-- When checked, the add-on is automatically stopped before updates begin and restarted after all updates complete
+- When checked, the add-on is automatically stopped before updates/force installs begin and restarted after all updates/force installs complete
 - The add-on is always restarted, even if updates are cancelled or fail
 - The current status (Running/Stopped) is polled every 30 seconds
-- This setting applies to both manual and auto-updates
 
 `This is useful for systems with limited memory where the VS Code Server add-on can cause ESPHome compilations to fail due to insufficient RAM.`
 
