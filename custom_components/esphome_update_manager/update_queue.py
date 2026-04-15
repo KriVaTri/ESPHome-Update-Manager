@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import traceback
 from datetime import datetime
 from typing import Any
 
@@ -39,16 +38,25 @@ PHASE_STARTING_ADDON = "starting_addon"
 
 
 class DeviceUpdateResult:
-    """Result of a single device update."""
-
-    def __init__(self, entity_id: str, from_version: str | None = None, to_version: str | None = None) -> None:
+    def __init__(
+        self,
+        entity_id: str,
+        from_version: str | None = None,
+        to_version: str | None = None,
+        is_force_install: bool = False,
+        device_id: str | None = None,
+        name: str | None = None,
+    ) -> None:
         self.entity_id = entity_id
+        self.name = name
         self.status: str = STATUS_QUEUED
         self.started_at: datetime | None = None
         self.finished_at: datetime | None = None
         self.error: str | None = None
         self.from_version: str | None = from_version
         self.to_version: str | None = to_version
+        self.is_force_install: bool = is_force_install
+        self.device_id: str | None = device_id
 
 
 class UpdateQueue:
@@ -72,12 +80,10 @@ class UpdateQueue:
 
     @property
     def phase(self) -> str:
-        """Return the current phase of the update queue."""
         return self._phase
 
     @property
     def addon_name(self) -> str | None:
-        """Return the name of the addon being stopped/started."""
         return self._addon_name
 
     @property
@@ -85,12 +91,15 @@ class UpdateQueue:
         return [
             {
                 "entity_id": r.entity_id,
+                "name": r.name if hasattr(r, 'name') and r.name else r.entity_id,
                 "status": r.status,
                 "started_at": r.started_at.isoformat() if r.started_at else None,
                 "finished_at": r.finished_at.isoformat() if r.finished_at else None,
                 "error": r.error,
                 "from_version": r.from_version,
                 "to_version": r.to_version,
+                "is_force_install": r.is_force_install,
+                "device_id": r.device_id,
             }
             for r in self._queue
         ]
@@ -102,23 +111,62 @@ class UpdateQueue:
             counts[r.status] = counts.get(r.status, 0) + 1
         return counts
 
-    def start(self, entity_ids: list[str], stop_addon_slug: str | None = None, version_info: dict | None = None) -> None:
+    def start(
+        self,
+        entity_ids: list[str],
+        stop_addon_slug: str | None = None,
+        version_info: dict | None = None,
+        force_install_devices: list[dict] | None = None,
+    ) -> None:
+        """Start the update queue.
+        
+        Args:
+            entity_ids: List of entity_ids for normal updates, OR device names for force install.
+            stop_addon_slug: Optional add-on to stop during updates.
+            version_info: Optional version info per entity_id.
+            force_install_devices: If set, list of dicts with device info for force install.
+                Each dict: {"entity_id": str, "device_id": str, "name": str}
+        """
         if self._running:
             raise RuntimeError("Update queue is already running")
 
         if version_info is None:
             version_info = {}
 
-        _LOGGER.debug("Starting update queue with %d entities: %s", len(entity_ids), entity_ids)
-
-        self._queue = [
-            DeviceUpdateResult(
-                eid,
-                from_version=version_info.get(eid, {}).get("from"),
-                to_version=version_info.get(eid, {}).get("to"),
+        if force_install_devices is not None:
+            # Force install mode - build queue from device list
+            _LOGGER.debug(
+                "Starting force install queue with %d devices: %s",
+                len(force_install_devices),
+                [d["name"] for d in force_install_devices],
             )
-            for eid in entity_ids
-        ]
+            self._queue = [
+                DeviceUpdateResult(
+                    entity_id=d["entity_id"],
+                    is_force_install=True,
+                    device_id=d.get("device_id"),
+                    name=d.get("name"),
+                    from_version=d.get("from_version"),
+                    to_version=d.get("to_version"),
+                )
+                for d in force_install_devices
+            ]
+        else:
+            _LOGGER.debug(
+                "Starting update queue with %d entities: %s", len(entity_ids), entity_ids
+            )
+            self._queue = [
+                DeviceUpdateResult(
+                    eid,
+                    from_version=version_info.get(eid, {}).get("from"),
+                    to_version=version_info.get(eid, {}).get("to"),
+                    is_force_install=False,
+                    name=version_info.get(eid, {}).get("name"),
+                    device_id=version_info.get(eid, {}).get("device_id"),
+                )
+                for eid in entity_ids
+            ]
+
         self._running = True
         self._cancelled = False
         self._current_index = 0
@@ -130,9 +178,6 @@ class UpdateQueue:
 
     def cancel(self) -> None:
         _LOGGER.debug("Cancel requested - setting _cancelled = True (was: %s)", self._cancelled)
-        # Log stack trace to see where cancel was called from
-        _LOGGER.debug("Cancel call stack:\n%s", "".join(traceback.format_stack()))
-        
         self._cancelled = True
         if self._task and not self._task.done():
             _LOGGER.debug("Cancelling asyncio task")
@@ -145,22 +190,15 @@ class UpdateQueue:
         self._queue.clear()
 
     def _fire_phase_changed(self) -> None:
-        """Fire event when phase changes."""
         self.hass.bus.async_fire(
             "esphome_update_manager_phase_changed",
-            {
-                "phase": self._phase,
-                "addon_name": self._addon_name,
-            },
+            {"phase": self._phase, "addon_name": self._addon_name},
         )
 
     async def _stop_addon(self) -> None:
-        """Stop add-on before updates if requested."""
         if not self._stop_addon_slug:
             return
-
         from . import async_get_addon_info, async_stop_addon
-
         info = await async_get_addon_info(self.hass, self._stop_addon_slug)
         if info and info.get("state") == "started":
             self._addon_was_running = True
@@ -171,29 +209,22 @@ class UpdateQueue:
             success = await async_stop_addon(self.hass, self._stop_addon_slug)
             if success:
                 _LOGGER.info("Add-on %s stopped successfully", self._addon_name)
-                # Give it a moment to free memory
                 await asyncio.sleep(5)
             else:
                 _LOGGER.warning("Failed to stop add-on %s", self._addon_name)
                 self._addon_was_running = False
 
     async def _restart_addon(self) -> None:
-        """Restart add-on after updates if it was running before."""
         if not self._stop_addon_slug or not self._addon_was_running:
             return
-
         from . import async_start_addon, async_get_addon_info
-
         info = await async_get_addon_info(self.hass, self._stop_addon_slug)
         self._addon_name = info.get("name", self._stop_addon_slug) if info else self._stop_addon_slug
-
         self._phase = PHASE_STARTING_ADDON
         self._fire_phase_changed()
         _LOGGER.info("Restarting add-on %s after updates", self._addon_name)
         success = await async_start_addon(self.hass, self._stop_addon_slug)
-        
         if success:
-            # Wait for addon to actually be running (max 60 seconds)
             for _ in range(30):
                 await asyncio.sleep(2)
                 info = await async_get_addon_info(self.hass, self._stop_addon_slug)
@@ -208,26 +239,27 @@ class UpdateQueue:
     async def _run(self) -> None:
         _LOGGER.debug("Update queue _run() started")
         try:
-            # Stop add-on if requested
             await self._stop_addon()
-
-            # Set phase to updating
             self._phase = PHASE_UPDATING
             self._fire_phase_changed()
 
             for i, item in enumerate(self._queue):
                 self._current_index = i
-                _LOGGER.debug("Processing queue item %d/%d: %s (cancelled=%s)", 
-                            i + 1, len(self._queue), item.entity_id, self._cancelled)
+                _LOGGER.debug(
+                    "Processing queue item %d/%d: %s (cancelled=%s, force=%s)",
+                    i + 1, len(self._queue), item.entity_id, self._cancelled, item.is_force_install,
+                )
 
                 if self._cancelled:
-                    _LOGGER.info("Marking %s as cancelled (cancelled flag was set before processing)", item.entity_id)
+                    _LOGGER.info("Marking %s as cancelled", item.entity_id)
                     item.status = STATUS_CANCELLED
                     continue
 
                 await self._update_single(item)
 
-                _LOGGER.debug("Finished updating %s with status: %s", item.entity_id, item.status)
+                _LOGGER.debug(
+                    "Finished %s with status: %s", item.entity_id, item.status
+                )
 
                 self.hass.bus.async_fire(
                     "esphome_update_manager_progress",
@@ -235,14 +267,11 @@ class UpdateQueue:
                 )
 
                 if i < len(self._queue) - 1 and not self._cancelled:
-                    _LOGGER.debug("Waiting %d seconds before next update (cancelled=%s)", 
-                                DEFAULT_DELAY_BETWEEN, self._cancelled)
                     try:
                         await asyncio.wait_for(
                             self._wait_for_cancel(),
                             timeout=DEFAULT_DELAY_BETWEEN,
                         )
-                        _LOGGER.debug("Wait interrupted - cancel detected")
                     except asyncio.TimeoutError:
                         pass
 
@@ -250,16 +279,12 @@ class UpdateQueue:
             _LOGGER.debug("Update queue task was cancelled via CancelledError")
             for item in self._queue:
                 if item.status == STATUS_QUEUED:
-                    _LOGGER.debug("Marking queued item %s as cancelled", item.entity_id)
                     item.status = STATUS_CANCELLED
                 elif item.status == STATUS_RUNNING:
-                    _LOGGER.debug("Marking running item %s as cancelled", item.entity_id)
                     item.status = STATUS_CANCELLED
                     item.error = "Cancelled by user"
                     item.finished_at = datetime.now()
         finally:
-            _LOGGER.debug("Update queue _run() finishing, restarting addon if needed")
-            # Always restart add-on if it was stopped
             try:
                 await self._restart_addon()
             except Exception as err:
@@ -274,12 +299,8 @@ class UpdateQueue:
                 {"results": self.results, "summary": self.summary},
             )
 
-            # Check for any devices that came online during the batch update
             if not self._cancelled:
-                _LOGGER.debug("Checking for devices that came online during batch update")
-                # Import here to avoid circular import
                 from . import _check_and_start_auto_update
-                # Small delay to allow entities to stabilize
                 await asyncio.sleep(3)
                 await _check_and_start_auto_update(self.hass)
 
@@ -288,16 +309,12 @@ class UpdateQueue:
             await asyncio.sleep(1)
 
     def _is_external_device(self, entity_id: str) -> bool:
-        """Check if this is an external dashboard device."""
         return entity_id.startswith("external:")
 
     def _get_external_device_name(self, entity_id: str) -> str:
-        """Extract device name from external entity_id (without .yaml)."""
-        # Format: external:device-name
         return entity_id.replace("external:", "", 1)
 
     def _is_entity_available(self, entity_id: str) -> bool:
-        """Check if entity is available. External devices are always 'available'."""
         if self._is_external_device(entity_id):
             return True
         state = self.hass.states.get(entity_id)
@@ -306,17 +323,19 @@ class UpdateQueue:
         return state.state not in ("unavailable", "unknown")
 
     async def _update_single(self, item: DeviceUpdateResult) -> None:
-        _LOGGER.debug("Starting update for %s", item.entity_id)
+        _LOGGER.debug("Starting update for %s (force=%s)", item.entity_id, item.is_force_install)
         item.status = STATUS_RUNNING
         item.started_at = datetime.now()
 
         try:
-            # Check if this is an external device
+            if item.is_force_install:
+                await self._force_install_device(item)
+                return
+
             if self._is_external_device(item.entity_id):
                 await self._update_external_device(item)
                 return
 
-            # Local device - check availability
             if not self._is_entity_available(item.entity_id):
                 _LOGGER.info("Device %s unavailable - skipping", item.entity_id)
                 item.status = STATUS_SKIPPED
@@ -324,7 +343,6 @@ class UpdateQueue:
                 item.finished_at = datetime.now()
                 return
 
-            # Local device - use HA service call
             _LOGGER.debug("Calling update.install for %s", item.entity_id)
             try:
                 await self.hass.services.async_call(
@@ -333,43 +351,33 @@ class UpdateQueue:
                     {"entity_id": item.entity_id},
                     blocking=True,
                 )
-                _LOGGER.debug("update.install call completed for %s", item.entity_id)
             except Exception as install_err:
                 error_msg = str(install_err)
                 _LOGGER.error("Install failed for %s: %s", item.entity_id, error_msg)
-                if "Error compiling" in error_msg:
-                    item.status = STATUS_FAILED
-                    item.error = f"Compile failed — {error_msg}"
-                else:
-                    item.status = STATUS_FAILED
-                    item.error = f"Install failed — {error_msg}"
+                item.status = STATUS_FAILED
+                item.error = (
+                    f"Compile failed — {error_msg}"
+                    if "Error compiling" in error_msg
+                    else f"Install failed — {error_msg}"
+                )
                 item.finished_at = datetime.now()
                 return
 
-            # Verify completion
             state = self.hass.states.get(item.entity_id)
             if state and state.state == "off":
-                _LOGGER.debug("Device %s already shows state=off, marking success", item.entity_id)
                 item.status = STATUS_SUCCESS
             else:
-                _LOGGER.debug("Waiting for completion of %s (current state: %s)", 
-                            item.entity_id, state.state if state else "None")
                 success, error_reason = await self._wait_for_completion(item.entity_id)
                 if self._cancelled:
-                    _LOGGER.info("Device %s marked cancelled after wait_for_completion (cancelled=%s)", 
-                                item.entity_id, self._cancelled)
                     item.status = STATUS_CANCELLED
                     item.error = "Cancelled by user"
                 elif success:
-                    _LOGGER.info("Device %s update completed successfully", item.entity_id)
                     item.status = STATUS_SUCCESS
                 else:
-                    _LOGGER.warning("Device %s update failed: %s", item.entity_id, error_reason)
                     item.status = STATUS_FAILED
                     item.error = error_reason or "Update failed"
 
         except asyncio.CancelledError:
-            _LOGGER.debug("_update_single for %s caught CancelledError", item.entity_id)
             item.status = STATUS_CANCELLED
             item.error = "Cancelled by user"
             raise
@@ -379,7 +387,126 @@ class UpdateQueue:
             item.error = str(err)
         finally:
             item.finished_at = item.finished_at or datetime.now()
-            _LOGGER.debug("_update_single finished for %s, status=%s", item.entity_id, item.status)
+            if item.status in (STATUS_FAILED, STATUS_CANCELLED, STATUS_SKIPPED):
+                if not item.is_force_install:
+                    item.to_version = item.from_version
+
+    async def _force_install_device(self, item: DeviceUpdateResult) -> None:
+        """Force install a device via ESPHome dashboard (compile + OTA upload)."""
+        from homeassistant.helpers import device_registry as dr
+        from . import _normalize_device_name
+
+        local_coordinator = self.hass.data[DOMAIN].get("local_dashboard")
+        external_coordinator = self.hass.data[DOMAIN].get("external_dashboard")
+
+        if not (local_coordinator and local_coordinator.available) and \
+           not (external_coordinator and external_coordinator.available):
+            item.status = STATUS_FAILED
+            item.error = "No dashboard available"
+            item.finished_at = datetime.now()
+            return
+
+        # Resolve device name from device_id
+        dev_reg = dr.async_get(self.hass)
+        device = dev_reg.async_get(item.device_id) if item.device_id else None
+
+        if not device:
+            item.status = STATUS_FAILED
+            item.error = "Device not found"
+            item.finished_at = datetime.now()
+            return
+
+        original_name = device.name
+        user_name = device.name_by_user
+        display_name = user_name or original_name or item.device_id
+
+        if not original_name:
+            item.status = STATUS_FAILED
+            item.error = "No device name"
+            item.finished_at = datetime.now()
+            return
+
+        # Determine coordinator and configuration
+        coordinator = None
+        configuration = None
+
+        if external_coordinator and external_coordinator.available:
+            external_device = external_coordinator.get_device_by_name(original_name)
+            if not external_device and user_name:
+                external_device = external_coordinator.get_device_by_name(user_name)
+            if external_device:
+                coordinator = external_coordinator
+                configuration = external_device.get("configuration", original_name)
+                _LOGGER.debug("%s: Found in external dashboard", display_name)
+
+        if not coordinator and local_coordinator and local_coordinator.available:
+            coordinator = local_coordinator
+            configuration = _normalize_device_name(original_name)
+            _LOGGER.debug("%s: Using local dashboard", display_name)
+
+        if not coordinator:
+            item.status = STATUS_FAILED
+            item.error = "No dashboard available"
+            item.finished_at = datetime.now()
+            return
+
+        if not configuration.endswith(".yaml"):
+            configuration = f"{configuration}.yaml"
+
+        from . import _build_to_version, _get_local_esphome_builder_version, _get_external_dashboard_version
+        if coordinator == external_coordinator:
+            builder_version = _get_external_dashboard_version(self.hass)
+        else:
+            builder_version = _get_local_esphome_builder_version(self.hass)
+
+        yaml_project_version = None
+        try:
+            config = await coordinator.async_get_config(configuration)
+            if config:
+                yaml_project_version = config.get("esphome", {}).get("project", {}).get("version")
+        except Exception:
+            pass
+
+        item.to_version = _build_to_version(item.from_version, builder_version, yaml_project_version)
+
+        _LOGGER.info(
+            "Force installing %s (config: %s) via %s dashboard",
+            display_name,
+            configuration,
+            "external" if coordinator == external_coordinator else "local",
+        )
+
+        # Step 1: Compile
+        if self._cancelled:
+            item.status = STATUS_CANCELLED
+            item.error = "Cancelled by user"
+            item.finished_at = datetime.now()
+            return
+
+        compile_success = await coordinator.async_compile(configuration)
+        if not compile_success:
+            item.status = STATUS_FAILED
+            item.error = "Compile failed — check ESPHome dashboard for details"
+            item.finished_at = datetime.now()
+            return
+
+        # Step 2: Upload via OTA
+        if self._cancelled:
+            item.status = STATUS_CANCELLED
+            item.error = "Cancelled by user"
+            item.finished_at = datetime.now()
+            return
+
+        upload_success = await coordinator.async_upload(configuration, "OTA")
+        if not upload_success:
+            item.status = STATUS_FAILED
+            item.error = "OTA upload failed — check ESPHome dashboard for details"
+            item.finished_at = datetime.now()
+            return
+
+        item.status = STATUS_SUCCESS
+        item.finished_at = datetime.now()
+        _LOGGER.info("Force install completed for %s", display_name)
 
     async def _update_external_device(self, item: DeviceUpdateResult) -> None:
         """Update a device via the external ESPHome dashboard."""
@@ -387,7 +514,7 @@ class UpdateQueue:
         from . import _normalize_device_name
 
         coordinator: ExternalDashboardCoordinator | None = self.hass.data[DOMAIN].get("external_dashboard")
-        
+
         if not coordinator:
             item.status = STATUS_FAILED
             item.error = "External dashboard not configured"
@@ -400,30 +527,23 @@ class UpdateQueue:
             item.finished_at = datetime.now()
             return
 
-        # Get device name from entity_id and find matching dashboard device
         ha_device_name = self._get_external_device_name(item.entity_id)
-        
-        # Find the actual ESPHome config name from dashboard
         configuration = None
         normalized_ha_name = _normalize_device_name(ha_device_name)
-        
+
         for config_name, device_info in coordinator.data.items():
             if _normalize_device_name(config_name) == normalized_ha_name:
                 configuration = device_info.get("configuration", config_name)
                 if not configuration.endswith(".yaml"):
                     configuration = f"{configuration}.yaml"
                 break
-        
-        # If not found by HA name, try to find by looking up the HA device's original name
+
         if not configuration:
             from homeassistant.helpers import device_registry as dr
             dev_reg = dr.async_get(self.hass)
-            
-            # Find device by searching for matching name
             for device in dev_reg.devices.values():
                 device_name = device.name_by_user or device.name
                 if device_name and _normalize_device_name(device_name) == normalized_ha_name:
-                    # Found the device, now try original name
                     original_name = device.name
                     if original_name:
                         normalized_original = _normalize_device_name(original_name)
@@ -434,27 +554,19 @@ class UpdateQueue:
                                     configuration = f"{configuration}.yaml"
                                 break
                     break
-        
+
         if not configuration:
             item.status = STATUS_FAILED
             item.error = f"Could not find ESPHome configuration for {ha_device_name}"
             item.finished_at = datetime.now()
             return
-        
+
         _LOGGER.info("Updating external device via dashboard: %s", configuration)
 
-        # Step 1: Compile
-        _LOGGER.info("Compiling %s on external dashboard...", configuration)
-        try:
-            compile_success = await coordinator.async_compile(configuration)
-            if not compile_success:
-                item.status = STATUS_FAILED
-                item.error = "Compile failed on external dashboard. Try again in ESPHome dashboard for more information"
-                item.finished_at = datetime.now()
-                return
-        except Exception as err:
+        compile_success = await coordinator.async_compile(configuration)
+        if not compile_success:
             item.status = STATUS_FAILED
-            item.error = f"Compile error: {err}"
+            item.error = "Compile failed on external dashboard"
             item.finished_at = datetime.now()
             return
 
@@ -464,18 +576,10 @@ class UpdateQueue:
             item.finished_at = datetime.now()
             return
 
-        # Step 2: Upload via OTA
-        _LOGGER.info("Uploading %s via OTA...", configuration)
-        try:
-            upload_success = await coordinator.async_upload(configuration, "OTA")
-            if not upload_success:
-                item.status = STATUS_FAILED
-                item.error = "OTA upload failed on external dashboard. Try again in ESPHome dashboard for more information"
-                item.finished_at = datetime.now()
-                return
-        except Exception as err:
+        upload_success = await coordinator.async_upload(configuration, "OTA")
+        if not upload_success:
             item.status = STATUS_FAILED
-            item.error = f"Upload error: {err}"
+            item.error = "OTA upload failed on external dashboard"
             item.finished_at = datetime.now()
             return
 
@@ -485,15 +589,11 @@ class UpdateQueue:
             item.finished_at = datetime.now()
             return
 
-        # Step 3: Wait for device to come back online
-        _LOGGER.info("Waiting for device to reboot...")
-        await asyncio.sleep(10)  # Give device time to reboot
-
-        # Refresh coordinator to get new version info
+        await asyncio.sleep(10)
         try:
             await coordinator.async_request_refresh()
         except Exception:
-            pass  # Ignore refresh errors
+            pass
 
         item.status = STATUS_SUCCESS
         item.finished_at = datetime.now()
@@ -504,37 +604,23 @@ class UpdateQueue:
     ) -> bool:
         end_time = asyncio.get_event_loop().time() + timeout
         await asyncio.sleep(3)
-
         while asyncio.get_event_loop().time() < end_time:
             if self._cancelled:
-                _LOGGER.debug("_wait_for_start: cancelled flag detected for %s", entity_id)
                 return False
-
             state = self.hass.states.get(entity_id)
-
             if state is None or state.state == "unavailable":
                 return False
-
             in_progress = state.attributes.get(ATTR_IN_PROGRESS, False)
             if in_progress:
                 return True
-
             if state.state == "off":
                 return True
-
             await asyncio.sleep(3)
-
         return False
 
     async def _wait_for_completion(
         self, entity_id: str, timeout: int = DEFAULT_UPDATE_TIMEOUT
     ) -> tuple[bool, str | None]:
-        """Wait until update completes.
-
-        Returns (success, error_reason).
-        Tracks consecutive unavailable time — if device stays unavailable
-        for too long, it's considered lost (not just rebooting).
-        """
         _LOGGER.debug("_wait_for_completion started for %s (timeout=%ds)", entity_id, timeout)
         end_time = asyncio.get_event_loop().time() + timeout
         unavailable_since: float | None = None
@@ -545,78 +631,57 @@ class UpdateQueue:
 
         while asyncio.get_event_loop().time() < end_time:
             loop_count += 1
-            
             if self._cancelled:
-                _LOGGER.info("_wait_for_completion: cancelled flag detected for %s (loop %d)", 
-                            entity_id, loop_count)
                 return False, "Cancelled by user"
 
             state = self.hass.states.get(entity_id)
 
-            # Entity completely gone
             if state is None:
                 if unavailable_since is None:
                     unavailable_since = asyncio.get_event_loop().time()
-                    _LOGGER.debug("Entity %s is None, starting unavailable timer", entity_id)
                 elif (asyncio.get_event_loop().time() - unavailable_since) > MAX_UNAVAILABLE_DURATION:
-                    _LOGGER.warning("Entity %s disappeared for too long", entity_id)
                     return False, "Device disappeared and did not come back"
                 await asyncio.sleep(10)
                 continue
 
-            # Entity unavailable
             if state.state == "unavailable":
                 if unavailable_since is None:
                     unavailable_since = asyncio.get_event_loop().time()
-                    _LOGGER.debug("Entity %s became unavailable, starting timer", entity_id)
                 elif (asyncio.get_event_loop().time() - unavailable_since) > MAX_UNAVAILABLE_DURATION:
-                    if saw_in_progress:
-                        _LOGGER.warning("Entity %s went offline during update", entity_id)
-                        return False, "Device went offline during update and did not recover"
-                    else:
-                        _LOGGER.warning("Entity %s became unavailable", entity_id)
-                        return False, "Device became unavailable"
+                    return (
+                        False,
+                        "Device went offline during update and did not recover"
+                        if saw_in_progress
+                        else "Device became unavailable",
+                    )
                 await asyncio.sleep(10)
                 continue
 
-            # Entity is available again — reset unavailable timer
             if unavailable_since is not None:
-                _LOGGER.debug("Entity %s is available again after %.1fs", 
-                            entity_id, asyncio.get_event_loop().time() - unavailable_since)
-            unavailable_since = None
+                unavailable_since = None
 
             in_progress = state.attributes.get(ATTR_IN_PROGRESS, False)
-
             if in_progress and not saw_in_progress:
-                _LOGGER.debug("Entity %s now shows in_progress=True", entity_id)
                 saw_in_progress = True
 
             if not in_progress and state.state == "off":
-                # No update available anymore = success
-                _LOGGER.debug("Entity %s state=off, in_progress=False - success!", entity_id)
                 return True, None
 
             if not in_progress and state.state == "on":
-                # Update still available = didn't install
                 if saw_in_progress:
-                    # Was in progress but now shows update still available
-                    # Could be a false read, wait a bit
-                    _LOGGER.debug("Entity %s was in_progress but now state=on, waiting...", entity_id)
                     await asyncio.sleep(10)
                     continue
                 await asyncio.sleep(10)
                 continue
 
-            # Log state every ~30 seconds
             if loop_count % 6 == 0:
-                _LOGGER.debug("Entity %s still waiting: state=%s, in_progress=%s, saw_in_progress=%s", 
-                            entity_id, state.state, in_progress, saw_in_progress)
+                _LOGGER.debug(
+                    "Entity %s still waiting: state=%s, in_progress=%s",
+                    entity_id, state.state, in_progress,
+                )
 
             await asyncio.sleep(5)
 
-        # Overall timeout
-        _LOGGER.warning("Entity %s timed out after %ds (saw_in_progress=%s)", 
-                        entity_id, timeout, saw_in_progress)
         if saw_in_progress:
             return False, "Update timed out — device may still be updating"
         return False, "Update timed out — no progress detected"
