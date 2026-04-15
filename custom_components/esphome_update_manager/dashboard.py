@@ -177,6 +177,17 @@ class ExternalDashboardCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     len(configured),
                     self._esphome_version,
                 )
+
+                # Fire event so frontend knows to reload devices
+                self.hass.bus.async_fire(
+                    "esphome_update_manager_devices_updated",
+                    {"source": "external_dashboard"},
+                )
+
+                # Trigger auto-update check with fresh coordinator data
+                from . import _check_and_start_auto_update
+                self.hass.async_create_task(_check_and_start_auto_update(self.hass))
+
                 return devices
 
         except aiohttp.ClientError as err:
@@ -184,13 +195,20 @@ class ExternalDashboardCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         except Exception as err:
             raise UpdateFailed(f"Failed to fetch devices: {err}") from err
 
-    async def async_compile(self, configuration: str) -> bool:
-        """Compile a device configuration via WebSocket."""
+    async def async_compile(self, configuration: str, retries: int = 2) -> bool:
+        """Compile a device configuration via WebSocket, with retries."""
         if not self._available:
             _LOGGER.error("Cannot compile: dashboard not available")
             return False
 
-        return await self._run_websocket_command("compile", configuration)
+        for attempt in range(1, retries + 1):
+            result = await self._run_websocket_command("compile", configuration)
+            if result:
+                return True
+            if attempt < retries:
+                _LOGGER.warning("Compile failed for %s (attempt %d/%d), retrying in 5s...", configuration, attempt, retries)
+                await asyncio.sleep(5)
+        return False
 
     async def async_upload(self, configuration: str, port: str = "OTA") -> bool:
         """Upload firmware to a device via WebSocket."""
@@ -260,12 +278,10 @@ class ExternalDashboardCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                             event_type = data.get("event")
                             
                             if event_type == "line":
-                                # Log output line
                                 log_line = data.get("data", "")
-                                if any(x in log_line.lower() for x in ["error", "failed", "success", "done", "compiling", "uploading", "connecting", "ota"]):
+                                # Only log start, success, error messages - skip verbose compile output
+                                if any(x in log_line for x in ["INFO Compiling app", "SUCCESS", "Successfully", "ERROR", "FAILED", "OTA", "Connecting", "Uploading:"]):
                                     _LOGGER.info("[%s] %s", command, log_line)
-                                else:
-                                    _LOGGER.debug("[%s] %s", command, log_line)
                             
                             elif event_type == "exit":
                                 # Process finished
@@ -273,16 +289,12 @@ class ExternalDashboardCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                                 success = exit_code == 0
                                 _LOGGER.info("%s completed with exit code %s (success=%s)", command, exit_code, success)
                                 break
-                            
-                            else:
-                                _LOGGER.debug("[%s] Event: %s", command, data)
                         
                         except json.JSONDecodeError:
-                            # Plain text line
+                            # Plain text line - only log important messages
                             if any(x in line.lower() for x in ["error", "failed", "success", "done"]):
                                 _LOGGER.info("[%s] %s", command, line)
-                            else:
-                                _LOGGER.debug("[%s] %s", command, line)
+                            # Skip debug logging for regular output lines to avoid flooding
                     
                     elif msg.type == aiohttp.WSMsgType.ERROR:
                         _LOGGER.error("WebSocket error during %s: %s", command, ws.exception())
@@ -389,3 +401,186 @@ class ExternalDashboardCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "Dashboard credentials updated (auth %s)",
             "enabled" if self._auth else "disabled"
         )
+
+    async def async_get_config(self, configuration: str) -> dict | None:
+        """Get the configuration for a device via the external dashboard API."""
+        if not self._available:
+            _LOGGER.error("Cannot get config: dashboard not available")
+            return None
+
+        try:
+            async with self._session.get(
+                f"{self.url}/json-config",
+                params={"configuration": configuration},
+                timeout=aiohttp.ClientTimeout(total=10),
+                auth=self._auth,
+            ) as resp:
+                if resp.status == 200:
+                    return await resp.json()
+                elif resp.status == 401:
+                    _LOGGER.error("Authentication failed when getting config for %s", configuration)
+                    return None
+                else:
+                    _LOGGER.debug("Failed to get config for %s: %s", configuration, resp.status)
+                    return None
+        except Exception as err:
+            _LOGGER.debug("Failed to get config for %s: %s", configuration, err)
+            return None
+
+class LocalDashboardCoordinator:
+    """Coordinator for local ESPHome dashboard integration.
+    
+    Uses Home Assistant's built-in esphome_dashboard_manager to communicate
+    with the ESPHome add-on without requiring external HTTP access.
+    """
+
+    def __init__(self, hass: HomeAssistant) -> None:
+        """Initialize the local dashboard coordinator."""
+        self._hass = hass
+        self._api = None
+        self._esphome_version: str | None = None
+
+    @property
+    def available(self) -> bool:
+        """Return True if the local dashboard is available."""
+        return self._api is not None
+
+    @property
+    def esphome_version(self) -> str | None:
+        """Return the ESPHome version of the local dashboard."""
+        return self._esphome_version
+
+    async def async_setup(self) -> bool:
+        """Set up the local dashboard coordinator.
+        
+        Returns:
+            True if a local ESPHome dashboard is available, False otherwise.
+        """
+        dashboard_manager = self._hass.data.get("esphome_dashboard_manager")
+        if not dashboard_manager:
+            _LOGGER.debug("ESPHome dashboard manager not available")
+            return False
+
+        dashboard = dashboard_manager.async_get()
+        if not dashboard:
+            _LOGGER.debug("ESPHome dashboard not available")
+            return False
+
+        api = dashboard.api
+        if not api:
+            _LOGGER.debug("ESPHome dashboard API not available")
+            return False
+
+        self._api = api
+        _LOGGER.info("Local ESPHome dashboard API initialized")
+        return True
+
+    async def async_compile(self, configuration: str, retries: int = 2) -> bool:
+        """Compile a device configuration, with retries on failure."""
+        for attempt in range(1, retries + 1):
+            result = await self._try_compile(configuration)
+            if result:
+                return True
+            if attempt < retries:
+                _LOGGER.warning("Compile failed for %s (attempt %d/%d), retrying in 5s...", configuration, attempt, retries)
+                await asyncio.sleep(5)
+        return False
+
+    async def _try_compile(self, configuration: str) -> bool:
+        dashboard_manager = self._hass.data.get("esphome_dashboard_manager")
+        if dashboard_manager:
+            dashboard = dashboard_manager.async_get()
+            if dashboard and dashboard.api:
+                self._api = dashboard.api
+
+        if not self._api:
+            _LOGGER.error("Cannot compile: API not available")
+            return False
+
+        _LOGGER.info("Compiling %s via local dashboard", configuration)
+
+        try:
+            result = await asyncio.wait_for(
+                self._api.compile(configuration),
+                timeout=120,
+            )
+            _LOGGER.info("Compile %s: %s", configuration, "success" if result else "failed")
+            return result
+        except asyncio.TimeoutError:
+            _LOGGER.error("Compile timed out for %s after 120 seconds", configuration)
+            return False
+        except Exception as err:
+            _LOGGER.error("Compile failed for %s: %s", configuration, err)
+            return False
+
+    async def async_upload(self, configuration: str, port: str = "OTA") -> bool:
+        """Upload firmware to a device.
+        
+        Args:
+            configuration: The YAML filename (e.g., 'esp-test.yaml')
+            port: The upload port (default: 'OTA')
+        
+        Returns:
+            True if upload succeeded, False otherwise.
+        """
+        if not self._api:
+            _LOGGER.error("Cannot upload: API not available")
+            return False
+
+        _LOGGER.info("Uploading %s via %s", configuration, port)
+
+        def line_callback(line: str) -> None:
+            if any(x in line.lower() for x in ["error", "failed", "success", "ota", "uploading"]):
+                _LOGGER.info("[upload] %s", line)
+            else:
+                _LOGGER.debug("[upload] %s", line)
+
+        try:
+            result = await asyncio.wait_for(
+                self._api.upload(configuration, port),
+                timeout=120,
+            )
+            _LOGGER.info("Upload %s: %s", configuration, "success" if result else "failed")
+            return result
+        except asyncio.TimeoutError:
+            _LOGGER.error("Upload timed out for %s after 120 seconds", configuration)
+            return False
+        except Exception as err:
+            _LOGGER.error("Upload failed for %s: %s", configuration, err)
+            return False
+
+    def get_device_by_name(self, name: str) -> dict[str, Any] | None:
+        """Get device info by name.
+        
+        Note: Local dashboard doesn't maintain device list like external.
+        Returns minimal info for compatibility.
+        """
+        # Local dashboard doesn't have device list - return None
+        # Device matching happens via HA's entity/device registry
+        return None
+
+    async def async_get_config(self, configuration: str) -> dict | None:
+        """Get the configuration for a device.
+
+        Args:
+            configuration: The YAML filename (e.g., 'esp-test.yaml')
+
+        Returns:
+            Configuration dict or None if failed.
+        """
+        dashboard_manager = self._hass.data.get("esphome_dashboard_manager")
+        if dashboard_manager:
+            dashboard = dashboard_manager.async_get()
+            if dashboard and dashboard.api:
+                self._api = dashboard.api
+
+        if not self._api:
+            _LOGGER.error("Cannot get config: API not available")
+            return None
+
+        try:
+            config = await self._api.get_config(configuration)
+            return config
+        except Exception as err:
+            _LOGGER.error("Failed to get config for %s: %s", configuration, err)
+            return None
