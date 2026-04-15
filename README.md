@@ -149,6 +149,7 @@ The panel shows all ESPHome devices with:
 | **Enable** (orange) | Firmware entity is disabled — click to enable |
 | **Enabling…** (orange + spinner) | Entity is being enabled, waiting for HA to pick it up |
 | **Updating…** (blue + spinner) | Update is in progress |
+| **Installing…** (blue + spinner) | Force install is in progress |
 | **Offline** (grey) | Device is not reachable |
 | **Unavailable** (light blue) | Firmware entity is unavailable (or external dashboard offline) |
 
