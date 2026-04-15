@@ -192,6 +192,8 @@ Force Install can also be triggered via a Home Assistant service call, useful fo
 |-----------|----------|-------------|
 | `device_id` | Yes | One or more Home Assistant device IDs to force install. Can be a single string or a list. |
 
+> **Note:** The force_install service respects the "Stop VS Code Server" setting — if enabled, the VS Code Server add-on will be stopped before the update and restarted afterwards.
+
 **Example automation — force install a specific device:**
 
 ```yaml
