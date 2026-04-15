@@ -259,7 +259,6 @@ A checkbox enables automatic updates:
 - When enabled, the integration monitors all ESPHome device update entities
 - When a device's firmware state changes to "update available" (e.g., after coming online or after ESPHome is updated), the update starts automatically
 - Auto-updates respect the "Stop VS Code Server" setting
-- Auto-updates work even when the panel is not open
 - The setting persists across Home Assistant restarts
 
 **Note:** Auto-update triggers when a device transitions to having an update available. This happens when:
