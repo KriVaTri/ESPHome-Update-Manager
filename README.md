@@ -2,12 +2,38 @@
 
 [![Latest Release](https://img.shields.io/github/v/release/KriVaTri/esphome-update-manager?include_prereleases&label=latest%20release)](https://github.com/KriVaTri/ESPHome-Update-Manager/releases)
 
-
 ESPHome device update manager for Home Assistant.
 
 A custom Home Assistant integration that provides a dedicated panel for managing ESPHome firmware updates across all your ESPHome devices.
 
 > **Note:** Since version 1.4.0 the integration supports both local and external ESPHome dashboards. Earlier versions only support the local ESPHome add-on/app.
+
+## Table of Contents
+
+- [Features](#features)
+- [Requirements](#requirements)
+- [Recommendations](#recommendations)
+- [Installation](#installation)
+- [Configuration](#configuration)
+  - [External Dashboard Setup](#external-dashboard-setup)
+- [Usage](#usage)
+  - [Device list](#device-list)
+  - [Device button](#device-button)
+  - [Batch updates](#batch-updates)
+  - [Force Install](#force-install)
+    - [Via frontend](#via-frontend)
+    - [Via service](#via-service-force_install)
+    - [Project version auto-check](#project-version-auto-check)
+  - [Auto-update](#auto-update)
+  - [VS Code Server add-on](#vs-code-server-add-on)
+  - [Results](#results)
+  - [Update log](#update-log)
+  - [Failure notifications](#failure-notifications)
+- [Error handling](#error-handling)
+  - [Failed update](#failed-update)
+- [Troubleshooting](#troubleshooting)
+- [Uninstallation](#uninstallation)
+- [License](#license)
 
 ## Features
 
@@ -17,6 +43,8 @@ A custom Home Assistant integration that provides a dedicated panel for managing
 - **Mixed setup support** — Use both local ESPHome add-on and external dashboard simultaneously
 - **Batch updates** — Select multiple devices and update them sequentially with a single click
 - **Individual updates** — Update a single device directly from the panel
+- **Force Install** — Recompile and upload firmware via the ESPHome dashboard, even when no update is available. Also used for project version updates
+- **Project version auto-check** — Automatically detects and installs project version updates when a device comes online, HA restarts, or the external dashboard comes online
 - **Auto-update** — Automatically start updates when new firmware becomes available
 - **Enable firmware entities** — Disabled firmware update entities can be enabled directly from the panel
 - **Skipped update detection** — Devices with updates skipped via Home Assistant are clearly marked
@@ -44,8 +72,8 @@ A custom Home Assistant integration that provides a dedicated panel for managing
     - platform: status
       name: "Status"
   ```
-   
-## Installation 
+
+## Installation
 
 1. Via HACS: Search for **ESPHome Update Manager**, download and restart Home Assistant
 
@@ -53,7 +81,6 @@ A custom Home Assistant integration that provides a dedicated panel for managing
 2. Add integration: Home Assistant → Settings → Devices & Services → Add Integration → search **ESPHome Update Manager** → submit
 3. Optionally configure an external ESPHome dashboard URL (see Configuration) and log backup count
 4. A new **ESPHome Updates** panel appears in the sidebar
-
 
 ## Configuration
 
@@ -132,6 +159,90 @@ The panel shows all ESPHome devices with:
 3. Devices are updated sequentially
 4. Progress and results are shown in real-time
 5. Click **⏹ Cancel** to stop the queue at any time
+
+### Force Install
+
+Force Install recompiles the firmware via the ESPHome dashboard and uploads it via OTA, regardless of whether an update is available. This is useful when:
+
+- You want to push a configuration change that does not change the firmware version
+- A device's project version in the YAML is higher than what is installed on the device
+- You want to force a clean reinstall of the current firmware
+
+#### Via frontend
+
+1. Click **Force Install** in the toolbar (only visible when no update is running)
+2. The panel switches to Force Install mode — all online devices become selectable
+3. Select one or more devices using the checkboxes (or click **Select all**)
+4. Click **▶ Force Install (n)**
+5. The integration compiles the firmware and uploads it via OTA for each selected device sequentially
+6. Progress and results are shown in real-time, just like a regular update
+7. Click **✕ Cancel** to exit Force Install mode without starting
+
+> **Note:** Force Install always recompiles the firmware, even if nothing has changed. This may take a few minutes per device depending on your hardware.
+
+#### Via service: `force_install`
+
+Force Install can also be triggered via a Home Assistant service call, useful for automations:
+
+**Service:** `esphome_update_manager.force_install`
+
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `device_id` | Yes | One or more Home Assistant device IDs to force install. Can be a single string or a list. |
+
+**Example automation — force install a specific device:**
+
+```yaml
+actions:
+  - action: esphome_update_manager.force_install
+    data:
+      device_id: "abc123def456"
+```
+
+**Example automation — force install multiple devices:**
+
+```yaml
+actions:
+  - action: esphome_update_manager.force_install
+    data:
+      device_id:
+        - "abc123def456"
+        - "789xyz000111"
+```
+
+> **Note:** The `device_id` is the Home Assistant device ID, not the entity ID. You can find the device ID in **Settings → Devices & Services → ESPHome → [your device] → ⋮ → Device info → ID**.
+
+#### Project version auto-check
+
+The integration automatically checks whether the project version defined in the YAML matches the version installed on the device. If the YAML contains a higher project version, a Force Install is triggered automatically.
+
+**This check runs in the following situations:**
+
+| Trigger | Description |
+|---------|-------------|
+| **Device comes online** | When a device transitions from offline to online, its project version is checked after a 5 second delay |
+| **HA restarts** | 30 seconds after Home Assistant has fully started, all currently online devices are checked |
+| **External dashboard comes online** | When the external dashboard reconnects, all currently online devices are checked |
+
+**How it works:**
+1. The integration reads the `sw_version` from the HA device registry (e.g., `1.0.2 (ESPHome 2026.3.1)`)
+2. It fetches the YAML config from the ESPHome dashboard and reads the `project.version` field
+3. If the YAML version is higher than the installed version, a Force Install is queued
+4. Multiple devices detected at the same time are grouped and started as a single batch (15 second debounce)
+5. If the update queue is already running, the Force Install is retried every 60 seconds until the queue is finished
+
+**Requirements for project version check:**
+- The device YAML must contain a `project` block with a `version` field:
+
+  ```yaml
+  esphome:
+    project:
+      name: "mycompany.mydevice"
+      version: "1.0.3"
+  ```
+
+- The device must have a `binary_sensor` status entity (see [Recommendations](#recommendations))
+- The ESPHome dashboard (local or external) must be accessible
 
 ### Auto-update
 
@@ -218,7 +329,7 @@ Access update logs via the **⋮** menu in the top-right corner of the panel:
 Each log includes:
 - Timestamp of the update run and integration version used
 - Summary with success/failed/skipped/cancelled counts
-- Details per device including status, start time, finish time, and any error messages
+- Details per device including status, version (from → to), start time, finish time, and any error messages
 
 Logs are stored at:
 - Current log: `config/www/esphome-update-manager/update_log.txt`
@@ -268,19 +379,13 @@ The integration handles various failure scenarios gracefully:
 
 <img width="700" height="460" alt="update1" src="https://github.com/user-attachments/assets/0b44677e-5030-4424-8bca-ff5f369c8b76" />
 
-
-
 ### Update in progress
 
 <img width="700" height="460" alt="update2" src="https://github.com/user-attachments/assets/fd477355-7e30-43c3-bebd-8205e7cf50e8" />
 
-
-
 ### Update successful
 
 <img width="700" height="460" alt="update3" src="https://github.com/user-attachments/assets/74513810-cfb9-4810-abb6-08f32e90a7c6" />
-
-
 
 ## Troubleshooting
 
@@ -327,6 +432,18 @@ To move a device from one dashboard to another, follow these steps:
 - Auto-update only triggers on state transitions (e.g., device coming online), not when already in "update available" state
 - Check Home Assistant logs for `esphome_update_manager` entries
 
+### Project version auto-check does not trigger
+- Ensure the device YAML contains a `project` block with a `version` field
+- Ensure the device has a `binary_sensor.status` entity (see [Recommendations](#recommendations))
+- Check that the ESPHome dashboard is accessible
+- Check Home Assistant logs for `esphome_update_manager` entries
+
+### Force Install fails
+- Verify the ESPHome dashboard is accessible and the device YAML exists
+- Check the ESPHome dashboard logs for compile or upload errors
+- Ensure the device is online and reachable via OTA
+- Check Home Assistant logs for `esphome_update_manager` entries
+
 ### External dashboard not connecting
 - Verify the URL is correct and accessible from Home Assistant (e.g., `http://192.168.1.100:6052`)
 - Check that the dashboard is running
@@ -359,7 +476,7 @@ To move a device from one dashboard to another, follow these steps:
 ### Device shows "Skipped" but I want to update it
 - To clear the skipped update go to Settings → System → Updates → ⋮ menu
 
-### Uninstallation
+## Uninstallation
 
 To completely remove the integration, follow these steps in order:
 
