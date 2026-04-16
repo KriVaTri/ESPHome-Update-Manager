@@ -219,11 +219,10 @@ class ExternalDashboardCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return await self._run_websocket_command("upload", configuration, port=port)
 
     async def _run_websocket_command(
-        self, 
-        command: str, 
-        configuration: str, 
+        self,
+        command: str,
+        configuration: str,
         port: str = "OTA",
-        timeout: int = 300,
     ) -> bool:
         """Run a compile/upload command via WebSocket.
         
@@ -242,8 +241,6 @@ class ExternalDashboardCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         try:
             async with self._session.ws_connect(
                 ws_url,
-                timeout=aiohttp.ClientTimeout(total=timeout),
-                headers=headers,
             ) as ws:
                 # Send the command with the required "type" field
                 if command == "compile":
@@ -500,10 +497,7 @@ class LocalDashboardCoordinator:
         _LOGGER.info("Compiling %s via local dashboard", configuration)
 
         try:
-            result = await asyncio.wait_for(
-                self._api.compile(configuration),
-                timeout=120,
-            )
+            result = await self._api.compile(configuration)
             _LOGGER.info("Compile %s: %s", configuration, "success" if result else "failed")
             return result
         except asyncio.TimeoutError:
@@ -536,10 +530,7 @@ class LocalDashboardCoordinator:
                 _LOGGER.debug("[upload] %s", line)
 
         try:
-            result = await asyncio.wait_for(
-                self._api.upload(configuration, port),
-                timeout=120,
-            )
+            result = await self._api.upload(configuration, port)
             _LOGGER.info("Upload %s: %s", configuration, "success" if result else "failed")
             return result
         except asyncio.TimeoutError:
