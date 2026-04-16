@@ -1309,11 +1309,15 @@ def _is_update_available(installed: str | None, latest: str | None) -> bool:
 
 
 def _is_esphome_version(version: str | None) -> bool:
-    """Check if version string contains an ESPHome version (YYYY.M.x format)."""
+    """Check if version string contains or is an ESPHome version."""
     if not version:
         return True
     v = str(version)
-    if re.search(r"20\d{2}\.\d+\.\d+", v):
+    # YYYY.M.x format (4-digit year)
+    if re.match(r"^20\d{2}\.\d+\.\d+", v):
+        return True
+    # Project version format: "1.0.2 (ESPHome 2026.3.3)"
+    if "ESPHome" in v:
         return True
     return False
 
@@ -1509,6 +1513,16 @@ def _find_ha_device_by_name(hass: HomeAssistant, name: str) -> dr.DeviceEntry | 
     return None
 
 
+def _is_esphome_firmware_entity(
+    hass: HomeAssistant,
+    entity: er.RegistryEntry,
+) -> bool:
+    """Check if this update entity is for ESPHome firmware (not a custom update component)."""
+    # Real ESPHome firmware entity always has original_device_class "firmware"
+    # Custom update components have original_device_class None
+    return entity.original_device_class == "firmware"
+
+
 def _get_esphome_update_entities(hass: HomeAssistant) -> list[dict[str, Any]]:
     """Get all ESPHome update entities with their status."""
     ent_reg = er.async_get(hass)
@@ -1557,10 +1571,13 @@ def _get_esphome_update_entities(hass: HomeAssistant) -> list[dict[str, Any]]:
             and entity.device_id in esphome_device_ids
         ):
             esphome_update_entities.append(entity)
-            if entity.device_id:
+            if entity.device_id and entity.original_device_class == "firmware":
                 devices_with_update_entity.add(entity.device_id)
 
     for entity in esphome_update_entities:
+        if not _is_esphome_firmware_entity(hass, entity):
+            _LOGGER.debug("Skipping non-ESPHome firmware entity: %s", entity.entity_id)
+            continue
         entity_id = entity.entity_id
         device_id = entity.device_id
         is_disabled = entity.disabled_by is not None
