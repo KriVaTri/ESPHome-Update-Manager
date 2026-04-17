@@ -134,6 +134,82 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data[DOMAIN]["unsubscribe_listeners"] = []
     hass.data[DOMAIN]["failed_devices"] = stored_settings.get("failed_devices", {})
 
+    # Cleanup remembered external devices that no longer exist in HA
+    async def _cleanup_remembered_devices(_hass: HomeAssistant) -> None:
+        dev_reg = dr.async_get(hass)
+        esphome_device_ids = _get_esphome_device_ids(hass)
+        
+        current_names: set[str] = set()
+        for device in dev_reg.devices.values():
+            if device.id in esphome_device_ids:
+                if device.name:
+                    current_names.add(_normalize_device_name(device.name))
+                if device.name_by_user:
+                    current_names.add(_normalize_device_name(device.name_by_user))
+        
+        remembered: dict = stored_settings.get("external_devices", {})
+        to_remove = [n for n in remembered if n not in current_names]
+        if to_remove:
+            for n in to_remove:
+                del remembered[n]
+            stored_settings["external_devices"] = remembered
+            hass.data[DOMAIN]["settings"] = stored_settings
+            await store.async_save(stored_settings)
+            _LOGGER.debug("Cleaned up %d stale remembered external devices", len(to_remove))
+    
+    async_at_started(hass, _cleanup_remembered_devices)
+
+    @callback
+    def _handle_device_registry_updated(event: Event) -> None:
+        """Handle device registry updates - cleanup remembered external devices."""
+        action = event.data.get("action")
+        if action != "remove":
+            return
+
+        # Force refresh external coordinator so cache is up to date
+        external_coordinator = hass.data[DOMAIN].get("external_dashboard")
+        if external_coordinator:
+            hass.async_create_task(external_coordinator.async_request_refresh())
+            _LOGGER.debug("Forced external coordinator refresh after device removal")
+            
+        device_id = event.data.get("device_id")
+        if not device_id:
+            return
+        
+        settings = hass.data[DOMAIN].get("settings", {})
+        remembered: dict = settings.get("external_devices", {})
+        if not remembered:
+            return
+
+        # Check if any remembered device no longer exists in HA
+        dev_reg = dr.async_get(hass)
+        esphome_device_ids = _get_esphome_device_ids(hass)
+        
+        current_names: set[str] = set()
+        for device in dev_reg.devices.values():
+            if device.id in esphome_device_ids:
+                if device.name:
+                    current_names.add(_normalize_device_name(device.name))
+                if device.name_by_user:
+                    current_names.add(_normalize_device_name(device.name_by_user))
+        
+        to_remove = [n for n in remembered if n not in current_names]
+        if to_remove:
+            for n in to_remove:
+                del remembered[n]
+            settings["external_devices"] = remembered
+            hass.data[DOMAIN]["settings"] = settings
+            store: Store = hass.data[DOMAIN].get("store")
+            if store:
+                hass.async_create_task(store.async_save(settings))
+            _LOGGER.debug("Removed %d stale remembered external devices after device removal", len(to_remove))
+
+    unsub_device_registry = hass.bus.async_listen(
+        dr.EVENT_DEVICE_REGISTRY_UPDATED,
+        _handle_device_registry_updated,
+    )
+    hass.data[DOMAIN]["unsub_device_registry"] = unsub_device_registry
+
     websocket_api.async_register_command(hass, ws_get_devices)
     websocket_api.async_register_command(hass, ws_start_updates)
     websocket_api.async_register_command(hass, ws_cancel_updates)
@@ -594,6 +670,10 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if unsub_always_on_dashboard:
         unsub_always_on_dashboard()
     hass.data[DOMAIN].pop("unsub_always_on_dashboard", None)
+    unsub_device_registry = hass.data[DOMAIN].get("unsub_device_registry")
+    if unsub_device_registry:
+        unsub_device_registry()
+    hass.data[DOMAIN].pop("unsub_device_registry", None)
 
     # Remove services
     hass.services.async_remove(DOMAIN, "start_updates")
@@ -1626,6 +1706,19 @@ def _get_esphome_update_entities(hass: HomeAssistant) -> list[dict[str, Any]]:
                     remembered_external_devices[normalized_name] = True
                     remembered_external_devices_changed = True
 
+        # Fallback: remembered as external even without coordinator
+        if not is_external_device:
+            if normalized_name in remembered_external_devices:
+                is_external_device = True
+                builder_version = None
+                is_dashboard_unavailable = True
+            else:
+                dev = dev_reg.async_get(device_id) if device_id else None
+                if dev and dev.name and _normalize_device_name(dev.name) in remembered_external_devices:
+                    is_external_device = True
+                    builder_version = None
+                    is_dashboard_unavailable = True
+
         if is_disabled:
             # For offline devices, extract ESPHome version from raw string for comparison
             # "1.0.5 (ESPHome 2026.3.3)" -> use "2026.3.3" for comparison
@@ -1822,18 +1915,17 @@ def _get_esphome_update_entities(hass: HomeAssistant) -> list[dict[str, Any]]:
                 if remember_name not in remembered_external_devices:
                     remembered_external_devices[remember_name] = True
                     remembered_external_devices_changed = True
-            elif normalized_name in remembered_external_devices:
-                # Remembered as external but dashboard offline or device not found
+
+        # Fallback: remembered as external even without coordinator
+        if not is_external_device:
+            if normalized_name in remembered_external_devices:
                 is_external_device = True
-                builder_version = external_builder_version
+                builder_version = None
                 is_unavailable = True
-                # Try to get project version from device info
             elif original_name and _normalize_device_name(original_name) in remembered_external_devices:
-                # Device was renamed, but original name is remembered as external
                 is_external_device = True
-                builder_version = external_builder_version
+                builder_version = None
                 is_unavailable = True
-                # Try to get project version from device info
         
         # In LOCAL mode, devices without update entity are always unavailable
         # (they're not in the local ESPHome add-on)
