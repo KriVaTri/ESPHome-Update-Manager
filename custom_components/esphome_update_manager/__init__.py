@@ -948,16 +948,18 @@ async def _check_project_version_update(hass: HomeAssistant, entity_id: str) -> 
     configuration = None
 
     if external_coordinator and external_coordinator.available:
-        external_device = external_coordinator.get_device_by_name(original_name)
-        if not external_device and device.name_by_user:
-            external_device = external_coordinator.get_device_by_name(device.name_by_user)
+        mac_suffix = _get_mac_suffix(device)
+        external_device = _match_device_to_external_dashboard(
+            hass, device.name_by_user or original_name, original_name=original_name, mac_suffix=mac_suffix
+        )
         if external_device:
             coordinator = external_coordinator
             configuration = external_device.get("configuration", original_name)
 
     if not coordinator and local_coordinator and local_coordinator.available:
         coordinator = local_coordinator
-        configuration = _normalize_device_name(original_name)
+        mac_suffix = _get_mac_suffix(device)
+        configuration = _get_local_config_filename(original_name, mac_suffix)
 
     if not coordinator:
         _LOGGER.debug("%s: No dashboard available for project version check", display_name)
@@ -1464,6 +1466,15 @@ def _normalize_device_name(name: str) -> str:
     return normalized
 
 
+def _get_mac_suffix(device: dr.DeviceEntry) -> str | None:
+    for conn_type, conn_val in device.connections:
+        if conn_type == dr.CONNECTION_NETWORK_MAC:
+            mac_clean = conn_val.replace(":", "").replace("-", "").lower()
+            if len(mac_clean) == 12:
+                return mac_clean[-6:]
+    return None
+
+
 def _build_to_version(sw_version_raw: str | None, new_esphome_version: str | None, new_project_version: str | None = None) -> str | None:
     """Build expected to_version string based on current sw_version format."""
     if not sw_version_raw:
@@ -1480,11 +1491,20 @@ def _build_to_version(sw_version_raw: str | None, new_esphome_version: str | Non
     return new_esphome_version or sw_version_raw
 
 
+def _get_local_config_filename(name: str, mac_suffix: str | None = None) -> str:
+    normalized = _normalize_device_name(name)
+    if mac_suffix and normalized.endswith(f"-{mac_suffix}"):
+        result = f"{normalized[:-7]}.yaml"
+        return result
+    return f"{normalized}.yaml"
+
+
 def _match_device_to_external_dashboard(
     hass: HomeAssistant,
     device_name: str,
     entity_id: str | None = None,
     original_name: str | None = None,
+    mac_suffix: str | None = None,
 ) -> dict | None:
     """Match a HA device to an external dashboard device."""
     coordinator = hass.data[DOMAIN].get("external_dashboard")
@@ -1502,6 +1522,22 @@ def _match_device_to_external_dashboard(
         if result:
             return result
     
+    # Try stripping MAC suffix - only if we can verify it's the actual MAC suffix
+    if mac_suffix:
+        normalized = _normalize_device_name(device_name)
+        if normalized.endswith(f"-{mac_suffix}"):
+            base_name = normalized[:-7]
+            result = coordinator.get_device_by_name(base_name)
+            if result:
+                return result
+        
+        if original_name:
+            normalized_original = _normalize_device_name(original_name)
+            if normalized_original.endswith(f"-{mac_suffix}"):
+                result = coordinator.get_device_by_name(normalized_original[:-7])
+                if result:
+                    return result
+
     # If no match and we have entity_id, try extracting from entity
     if entity_id:
         name_from_entity = (
@@ -1683,15 +1719,16 @@ def _get_esphome_update_entities(hass: HomeAssistant) -> list[dict[str, Any]]:
         normalized_name = _normalize_device_name(name)
         
         if external_coordinator:
-            # Get original ESPHome name (before user renamed it)
             original_name = None
+            mac_suffix = None
             if device_id:
                 dev = dev_reg.async_get(device_id)
                 if dev:
                     original_name = dev.name
+                    mac_suffix = _get_mac_suffix(dev)
             
             external_device_info = _match_device_to_external_dashboard(
-                hass, name, entity_id, original_name=original_name
+                hass, name, entity_id, original_name=original_name, mac_suffix=mac_suffix
             )
             if external_device_info:
                 is_external_device = True
@@ -1709,15 +1746,26 @@ def _get_esphome_update_entities(hass: HomeAssistant) -> list[dict[str, Any]]:
         # Fallback: remembered as external even without coordinator
         if not is_external_device:
             if normalized_name in remembered_external_devices:
-                is_external_device = True
-                builder_version = None
-                is_dashboard_unavailable = True
-            else:
-                dev = dev_reg.async_get(device_id) if device_id else None
-                if dev and dev.name and _normalize_device_name(dev.name) in remembered_external_devices:
+                if not external_coordinator or not external_dashboard_available:
+                    _LOGGER.debug("Device %s: marked external via remembered_external_devices", name)
                     is_external_device = True
                     builder_version = None
                     is_dashboard_unavailable = True
+                else:
+                    _LOGGER.debug("Device %s: removing from remembered_external_devices (coordinator available, no match)", name)
+                    del remembered_external_devices[normalized_name]
+                    remembered_external_devices_changed = True
+            else:
+                dev = dev_reg.async_get(device_id) if device_id else None
+                if dev and dev.name and _normalize_device_name(dev.name) in remembered_external_devices:
+                    if not external_coordinator or not external_dashboard_available:
+                        is_external_device = True
+                        builder_version = None
+                        is_dashboard_unavailable = True
+                    else:
+                        _LOGGER.debug("Device %s: removing original name from remembered_external_devices (coordinator available, no match)", name)
+                        del remembered_external_devices[_normalize_device_name(dev.name)]
+                        remembered_external_devices_changed = True
 
         if is_disabled:
             # For offline devices, extract ESPHome version from raw string for comparison
@@ -1899,8 +1947,9 @@ def _get_esphome_update_entities(hass: HomeAssistant) -> list[dict[str, Any]]:
         
         # Check if we can match to external dashboard
         if external_coordinator:
+            mac_suffix = _get_mac_suffix(device)
             external_device_info = _match_device_to_external_dashboard(
-                hass, name, None, original_name=original_name
+                hass, name, None, original_name=original_name, mac_suffix=mac_suffix
             )
             
             if external_device_info:
@@ -1916,16 +1965,34 @@ def _get_esphome_update_entities(hass: HomeAssistant) -> list[dict[str, Any]]:
                     remembered_external_devices[remember_name] = True
                     remembered_external_devices_changed = True
 
+        if not is_external_device:
+            local_coordinator = hass.data[DOMAIN].get("local_dashboard")
+            if local_coordinator and local_coordinator.available:
+                builder_version = local_builder_version
+                is_unavailable = False
+
         # Fallback: remembered as external even without coordinator
         if not is_external_device:
             if normalized_name in remembered_external_devices:
-                is_external_device = True
-                builder_version = None
-                is_unavailable = True
-            elif original_name and _normalize_device_name(original_name) in remembered_external_devices:
-                is_external_device = True
-                builder_version = None
-                is_unavailable = True
+                if not external_coordinator or not external_dashboard_available:
+                    is_external_device = True
+                    builder_version = None
+                    is_unavailable = True
+                else:
+                    _LOGGER.debug("Device %s: removing from remembered_external_devices (coordinator available, no match)", name)
+                    del remembered_external_devices[normalized_name]
+                    remembered_external_devices_changed = True
+            else:
+                orig_normalized = _normalize_device_name(original_name) if original_name else None
+                if orig_normalized and orig_normalized in remembered_external_devices:
+                    if not external_coordinator or not external_dashboard_available:
+                        is_external_device = True
+                        builder_version = None
+                        is_unavailable = True
+                    else:
+                        _LOGGER.debug("Device %s: removing original name from remembered_external_devices (coordinator available, no match)", name)
+                        del remembered_external_devices[orig_normalized]
+                        remembered_external_devices_changed = True
         
         # In LOCAL mode, devices without update entity are always unavailable
         # (they're not in the local ESPHome add-on)
@@ -2030,7 +2097,7 @@ def ws_get_devices(hass, connection, msg):
 
 
 async def _get_yaml_project_version(hass: HomeAssistant, device: dict) -> str | None:
-    """Haal project versie op uit yaml config."""
+    """Get project version from yaml config."""
     dev_reg = dr.async_get(hass)
     device_entry = dev_reg.async_get(device.get("device_id")) if device.get("device_id") else None
     if not device_entry:
@@ -2044,14 +2111,18 @@ async def _get_yaml_project_version(hass: HomeAssistant, device: dict) -> str | 
     configuration = None
 
     if external_coordinator and external_coordinator.available:
-        ext_dev = external_coordinator.get_device_by_name(original_name)
+        mac_suffix = _get_mac_suffix(device_entry)
+        ext_dev = _match_device_to_external_dashboard(
+            hass, device_entry.name_by_user or original_name, original_name=original_name, mac_suffix=mac_suffix
+        )
         if ext_dev:
             coordinator = external_coordinator
             configuration = ext_dev.get("configuration", original_name)
 
     if not coordinator and local_coordinator and local_coordinator.available:
         coordinator = local_coordinator
-        configuration = _normalize_device_name(original_name)
+        mac_suffix = _get_mac_suffix(device_entry)
+        configuration = _get_local_config_filename(original_name, mac_suffix)
 
     if not coordinator:
         return None
