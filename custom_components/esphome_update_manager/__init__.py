@@ -84,6 +84,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hass.data[DOMAIN]["local_dashboard"] = None
         _LOGGER.debug("Local ESPHome dashboard API not available")
 
+    hass.data[DOMAIN]["local_yaml_cache"] = {}
+
     # Setup external dashboard if configured
     if dashboard_url:
         external_coordinator = ExternalDashboardCoordinator(
@@ -1639,6 +1641,30 @@ def _is_esphome_firmware_entity(
     return entity.original_device_class == "firmware"
 
 
+async def _refresh_local_yaml_cache(
+    hass: HomeAssistant,
+    checks: list[tuple[str, str]],
+) -> None:
+    """Background refresh of local yaml cache, then notify panel."""
+    local_coordinator = hass.data[DOMAIN].get("local_dashboard")
+    if not local_coordinator or not local_coordinator.available:
+        return
+
+    cache = hass.data[DOMAIN].setdefault("local_yaml_cache", {})
+    changed = False
+
+    for device_id, config_filename in checks:
+        try:
+            config = await local_coordinator.async_get_config(config_filename)
+            cache[config_filename] = config is not None and bool(config)
+            changed = True
+        except Exception:
+            cache[config_filename] = False
+
+    if changed:
+        hass.bus.async_fire("esphome_update_manager_devices_updated")
+
+
 def _get_esphome_update_entities(hass: HomeAssistant) -> list[dict[str, Any]]:
     """Get all ESPHome update entities with their status."""
     ent_reg = er.async_get(hass)
@@ -1680,6 +1706,8 @@ def _get_esphome_update_entities(hass: HomeAssistant) -> list[dict[str, Any]]:
 
     esphome_update_entities: list[er.RegistryEntry] = []
     devices_with_update_entity: set[str] = set()
+
+    pending_yaml_checks: list[tuple[str, str]] = []
 
     for entity in ent_reg.entities.values():
         if (
@@ -1965,11 +1993,20 @@ def _get_esphome_update_entities(hass: HomeAssistant) -> list[dict[str, Any]]:
                     remembered_external_devices[remember_name] = True
                     remembered_external_devices_changed = True
 
-        if not is_external_device:
+        # Local dashboard yaml check (for suffix devices without update entity)
+        if not is_external_device and is_unavailable:
             local_coordinator = hass.data[DOMAIN].get("local_dashboard")
             if local_coordinator and local_coordinator.available:
-                builder_version = local_builder_version
-                is_unavailable = False
+                mac_suffix = _get_mac_suffix(device)
+                config_filename = _get_local_config_filename(original_name, mac_suffix)
+                local_yaml_cache = hass.data[DOMAIN].get("local_yaml_cache", {})
+                if config_filename in local_yaml_cache:
+                    if local_yaml_cache[config_filename]:
+                        builder_version = local_builder_version
+                        is_unavailable = False
+                else:
+                    # Cache miss - schedule background check
+                    pending_yaml_checks.append((device.id, config_filename))
 
         # Fallback: remembered as external even without coordinator
         if not is_external_device:
@@ -2076,6 +2113,9 @@ def _get_esphome_update_entities(hass: HomeAssistant) -> list[dict[str, Any]]:
             hass.async_create_task(store.async_save(settings))
 
     devices.sort(key=lambda d: (d["name"] or "").lower())
+    # Trigger background yaml cache refresh for cache misses
+    if pending_yaml_checks:
+        hass.async_create_task(_refresh_local_yaml_cache(hass, pending_yaml_checks))
     return devices
 
 # ── WebSocket Commands ────────────────────────────────────────────
@@ -2085,7 +2125,6 @@ def _get_esphome_update_entities(hass: HomeAssistant) -> list[dict[str, Any]]:
 def ws_get_devices(hass, connection, msg):
     devices = _get_esphome_update_entities(hass)
     
-    # Check if mixed setup (both local and external devices)
     has_local = any(not d.get("is_external", False) for d in devices)
     has_external = any(d.get("is_external", False) for d in devices)
     is_mixed_setup = has_local and has_external
