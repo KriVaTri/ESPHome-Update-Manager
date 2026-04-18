@@ -317,6 +317,27 @@ class UpdateQueue:
     def _is_entity_available(self, entity_id: str) -> bool:
         if self._is_external_device(entity_id):
             return True
+        if entity_id.startswith("device:"):
+            # No HA update entity - check via status sensor
+            from homeassistant.helpers import entity_registry as er
+            from homeassistant.helpers import device_registry as dr
+            from . import _get_esphome_device_ids, _find_status_entity
+            ent_reg = er.async_get(self.hass)
+            dev_reg = dr.async_get(self.hass)
+            esphome_device_ids = _get_esphome_device_ids(self.hass)
+            normalized = entity_id.replace("device:", "", 1)
+            for device in dev_reg.devices.values():
+                if device.id not in esphome_device_ids:
+                    continue
+                from . import _normalize_device_name
+                name = device.name_by_user or device.name
+                if name and _normalize_device_name(name) == normalized:
+                    status_entity = _find_status_entity(self.hass, ent_reg, device.id)
+                    if status_entity:
+                        state = self.hass.states.get(status_entity)
+                        return state is not None and state.state == "on"
+                    return True  # No status sensor → assume available
+            return False
         state = self.hass.states.get(entity_id)
         if state is None:
             return False
@@ -334,6 +355,10 @@ class UpdateQueue:
 
             if self._is_external_device(item.entity_id):
                 await self._update_external_device(item)
+                return
+
+            if item.entity_id.startswith("device:"):
+                await self._force_install_device(item)
                 return
 
             if not self._is_entity_available(item.entity_id):
@@ -431,18 +456,25 @@ class UpdateQueue:
         configuration = None
 
         if external_coordinator and external_coordinator.available:
-            external_device = external_coordinator.get_device_by_name(original_name)
-            if not external_device and user_name:
-                external_device = external_coordinator.get_device_by_name(user_name)
+            from . import _match_device_to_external_dashboard, _get_mac_suffix
+            mac_suffix = _get_mac_suffix(device)
+            external_device = _match_device_to_external_dashboard(
+                self.hass,
+                user_name or original_name,
+                original_name=original_name,
+                mac_suffix=mac_suffix,
+            )
             if external_device:
                 coordinator = external_coordinator
                 configuration = external_device.get("configuration", original_name)
-                _LOGGER.debug("%s: Found in external dashboard", display_name)
+                _LOGGER.debug("%s: Found in external dashboard, config=%s", display_name, configuration)
 
         if not coordinator and local_coordinator and local_coordinator.available:
             coordinator = local_coordinator
-            configuration = _normalize_device_name(original_name)
-            _LOGGER.debug("%s: Using local dashboard", display_name)
+            from . import _get_mac_suffix, _get_local_config_filename
+            mac_suffix = _get_mac_suffix(device)
+            configuration = _get_local_config_filename(original_name, mac_suffix)
+            _LOGGER.debug("%s: Using local dashboard, config=%s", display_name, configuration)
 
         if not coordinator:
             item.status = STATUS_FAILED
@@ -529,31 +561,24 @@ class UpdateQueue:
 
         ha_device_name = self._get_external_device_name(item.entity_id)
         configuration = None
-        normalized_ha_name = _normalize_device_name(ha_device_name)
 
-        for config_name, device_info in coordinator.data.items():
-            if _normalize_device_name(config_name) == normalized_ha_name:
-                configuration = device_info.get("configuration", config_name)
-                if not configuration.endswith(".yaml"):
-                    configuration = f"{configuration}.yaml"
-                break
-
-        if not configuration:
+        if item.device_id:
             from homeassistant.helpers import device_registry as dr
+            from . import _match_device_to_external_dashboard, _get_mac_suffix
             dev_reg = dr.async_get(self.hass)
-            for device in dev_reg.devices.values():
-                device_name = device.name_by_user or device.name
-                if device_name and _normalize_device_name(device_name) == normalized_ha_name:
-                    original_name = device.name
-                    if original_name:
-                        normalized_original = _normalize_device_name(original_name)
-                        for config_name, device_info in coordinator.data.items():
-                            if _normalize_device_name(config_name) == normalized_original:
-                                configuration = device_info.get("configuration", config_name)
-                                if not configuration.endswith(".yaml"):
-                                    configuration = f"{configuration}.yaml"
-                                break
-                    break
+            device = dev_reg.async_get(item.device_id)
+            if device:
+                mac_suffix = _get_mac_suffix(device)
+                external_device = _match_device_to_external_dashboard(
+                    self.hass,
+                    device.name_by_user or device.name,
+                    original_name=device.name,
+                    mac_suffix=mac_suffix,
+                )
+                if external_device:
+                    configuration = external_device.get("configuration")
+                    if configuration and not configuration.endswith(".yaml"):
+                        configuration = f"{configuration}.yaml"
 
         if not configuration:
             item.status = STATUS_FAILED
