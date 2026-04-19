@@ -38,6 +38,8 @@ class ESPHomeUpdatePanel extends LitElement {
       _forceInstallMode: { type: Boolean },
       _isForceInstallRun: { type: Boolean },
       _forceInstallingIds: { type: Object },
+      cardMode: { type: Boolean },
+      cardConfig: { type: Object }
     };
   }
 
@@ -79,6 +81,8 @@ class ESPHomeUpdatePanel extends LitElement {
     this._forceInstallMode = false;
     this._isForceInstallRun = false;
     this._forceInstallingIds = new Map();
+    this.cardMode = false;
+    this.cardConfig = {};
   }
 
   connectedCallback() {
@@ -966,6 +970,7 @@ class ESPHomeUpdatePanel extends LitElement {
         height: 56px;
         padding: 0 16px;
         background: var(--app-header-background-color, var(--primary-color, #03a9f4));
+        opacity: 1;
         color: var(--app-header-text-color, #fff);
         font-size: 20px;
         font-weight: 400;
@@ -995,21 +1000,27 @@ class ESPHomeUpdatePanel extends LitElement {
         position: sticky;
         top: 0;
         z-index: 50;
+        background: var(--primary-background-color, #fff);
       }
       h1 {
         margin: 0 0 8px;
         padding: 8px 16px;
         background: var(--secondary-background-color, #e0e0e0);
+        opacity: 1;
         display: flex;
         align-items: center;
       }
       .header-spacer { flex: 1; }
-      .content { padding: 0 16px 16px; }
+      .content {
+        padding: 0 16px 16px;
+        max-width: 1600px;
+        margin: 0 auto;
+      }
       .header-menu-container { position: relative; }
       .menu-btn {
         background: none;
         border: none;
-        font-size: 1em;
+        font-size: 24px;
         cursor: pointer;
         width: 32px;
         height: 32px;
@@ -1041,17 +1052,17 @@ class ESPHomeUpdatePanel extends LitElement {
         background: none;
         text-align: left;
         cursor: pointer;
-        font-size: 0.5em;
+        font-size: 14px;
         color: var(--primary-text-color);
         border-bottom: 1px solid var(--divider-color, #e0e0e0);
         border-radius: 0;
       }
       .menu-item:last-child { border-bottom: none; }
       .menu-item:hover { background: var(--secondary-background-color, #f5f5f5); }
-      .menu-item.current-log { font-size: 0.6em; }
+      .menu-item.current-log { font-size: 16px; }
       .menu-section-title {
         padding: 8px 16px 4px;
-        font-size: 0.5em;
+        font-size: 14px;
         text-transform: uppercase;
         color: var(--secondary-text-color, #666);
         letter-spacing: 0.5px;
@@ -1061,17 +1072,19 @@ class ESPHomeUpdatePanel extends LitElement {
         padding: 12px 16px;
         color: var(--secondary-text-color, #666);
         font-style: italic;
-        font-size: 0.5em;
+        font-size: 14px;
       }
       .name.failed { color: #f44336; }
       .toolbar { 
         display: flex; align-items: center; gap: 8px;
         margin: 8px 0; padding: 6px 12px 6px 20px;
         background: #aaa; border-radius: 8px;
+        position: relative;
       }
       .toolbar.force-mode { background: #aaa; }
       .toolbar-info { flex: 1; color: #333; font-size: 0.9em; }
       .toolbar.force-mode .toolbar-info { color: #fff; }
+      .toolbar.header-menu { font-size: 14px; }
       .device-list { margin: 0; }
       .device-row {
         display: flex; align-items: center; gap: 12px;
@@ -1223,6 +1236,45 @@ class ESPHomeUpdatePanel extends LitElement {
         overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
         min-width: 0;
       }
+      .card-title {
+        font-size: 1.2em;
+        font-weight: 500;
+        padding: 12px 4px 4px;
+        color: var(--primary-text-color);
+      }
+      .content.compact .device-row {
+        padding: 6px 12px;
+        gap: 8px;
+      }
+      .content.compact .addon-option {
+        padding: 4px 16px;
+        font-size: 0.8em;
+      }
+      .content.compact .toolbar {
+        padding: 4px 8px;
+        margin: 4px 0;
+      }
+      .content.compact button {
+        padding: 4px 12px;
+        font-size: 0.8em;
+        min-height: 28px;
+      }
+      .content.compact .name {
+        font-size: 0.9em;
+      }
+      .content.compact .version {
+        font-size: 0.75em;
+      }
+      .content.compact .device-summary {
+        font-size: 0.8em;
+      }
+      .content.compact .result-row {
+        font-size: 0.85em;
+      }
+      .content.compact .card-title {
+        font-size: 1em;
+        padding: 8px 4px 2px;
+      }
       @media (max-width: 600px) and (pointer: coarse) {
         .btn-select-all input[type="checkbox"] {
           width: 18px;
@@ -1242,7 +1294,7 @@ class ESPHomeUpdatePanel extends LitElement {
 
   // ── Main render ─────────────────────────────────────────────────
 
-  render() {
+render() {
     const merged = this._mergedDevices();
     const allResults = this._allResults;
     const selectableCount = merged.filter((d) => this._canSelect(d)).length;
@@ -1253,6 +1305,13 @@ class ESPHomeUpdatePanel extends LitElement {
     const showAddonOption = this._addonInfo?.installed;
     const showToolbar = selectableCount > 0 || this.running || this._forceInstallMode || forceSelectableCount > 0;
 
+    const cfg = this.cardConfig || {};
+    const hideResults = cfg.hide_results || false;
+    const hideAddonOption = cfg.hide_addon_option || false;
+    const hideAutoUpdate = cfg.hide_auto_update || false;
+    const compact = cfg.compact || false;
+    const cardTitle = cfg.title || null;
+
     return html`
       ${this._tooltipName ? html`
         <div class="name-tooltip" style="top: ${this._tooltipY}px; left: ${this._tooltipX}px">
@@ -1262,33 +1321,39 @@ class ESPHomeUpdatePanel extends LitElement {
 
       ${this._showLogPopup ? this._renderLogPopup() : ""}
 
-      <div class="header-wrapper">
-        ${this.narrow ? html`
-          <div class="app-toolbar">
-            <button class="sidebar-toggle" @click=${this._toggleSidebar} title="Open sidebar">
-              <svg viewBox="0 0 24 24">
-                <path d="M3,6H21V8H3V6M3,11H21V13H3V11M3,16H21V18H3V16Z" />
-              </svg>
-            </button>
-            <span class="title">ESPHome Update Manager</span>
-          </div>
+      ${this.cardMode && !cfg.show_header ? "" : html`
+        <div class="header-wrapper">
+          ${this.narrow ? html`
+            <div class="app-toolbar">
+              <button class="sidebar-toggle" @click=${this._toggleSidebar} title="Open sidebar">
+                <svg viewBox="0 0 24 24">
+                  <path d="M3,6H21V8H3V6M3,11H21V13H3V11M3,16H21V18H3V16Z" />
+                </svg>
+              </button>
+              <span class="title">ESPHome Update Manager</span>
+            </div>
+          ` : ""}
+
+          <h1>
+            <img src="/local/esphome-update-manager/logo.png"
+                style="height: 40px; vertical-align: middle; margin-right: 12px;">
+            ESPHome Update Manager
+            <span class="header-spacer"></span>
+            <div class="header-menu-container">
+              <button class="menu-btn" @click=${this._toggleMenu} title="View logs">⋮</button>
+              ${this._showMenu ? this._renderMenu() : ""}
+            </div>
+          </h1>
+        </div>
+      `}
+
+      <div class="content ${compact ? 'compact' : ''}">
+
+        ${this.cardMode && cardTitle ? html`
+          <div class="card-title">${cardTitle}</div>
         ` : ""}
 
-        <h1>
-          <img src="/local/esphome-update-manager/logo.png"
-              style="height: 40px; vertical-align: middle; margin-right: 12px;">
-          ESPHome Update Manager
-          <span class="header-spacer"></span>
-          <div class="header-menu-container">
-            <button class="menu-btn" @click=${this._toggleMenu} title="View logs">⋮</button>
-            ${this._showMenu ? this._renderMenu() : ""}
-          </div>
-        </h1>
-      </div>
-
-      <div class="content">
-
-        ${showAddonOption ? html`
+        ${showAddonOption && !hideAddonOption ? html`
           <div class="addon-option">
             <input type="checkbox"
               .checked=${this._stopAddonDuringUpdate}
@@ -1302,22 +1367,30 @@ class ESPHomeUpdatePanel extends LitElement {
           </div>
         ` : ""}
 
-        <div class="addon-option">
-          <input type="checkbox"
-            .checked=${this._autoUpdateEnabled}
-            @change=${(e) => {
-              this._autoUpdateEnabled = e.target.checked;
-              this._saveAutoUpdateSettings();
-            }} />
-          <span>Automatically start updates when available</span>
-          ${this._autoUpdateEnabled
-            ? html`<span class="addon-status addon-running">● Enabled</span>`
-            : html`<span class="addon-status addon-stopped">● Disabled</span>`
-          }
-        </div>
+        ${!hideAutoUpdate ? html`
+          <div class="addon-option">
+            <input type="checkbox"
+              .checked=${this._autoUpdateEnabled}
+              @change=${(e) => {
+                this._autoUpdateEnabled = e.target.checked;
+                this._saveAutoUpdateSettings();
+              }} />
+            <span>Automatically start updates when available</span>
+            ${this._autoUpdateEnabled
+              ? html`<span class="addon-status addon-running">● Enabled</span>`
+              : html`<span class="addon-status addon-stopped">● Disabled</span>`
+            }
+          </div>
+        ` : ""}
         
         ${showToolbar ? html`
           <div class="toolbar ${this._forceInstallMode ? 'force-mode' : ''}">
+            ${this.cardMode ? html`
+              <div class="header-menu-container" style="position: absolute; right: 8px;">
+                <button class="menu-btn" @click=${this._toggleMenu} title="View logs" style="color: #333; font-size: 24px;">⋮</button>
+                ${this._showMenu ? this._renderMenu() : ""}
+              </div>
+            ` : ""}
             ${this.running ? html`
               <label class="btn-select-all" style="pointer-events: none;">
                 <input type="checkbox" disabled .checked=${false} .indeterminate=${false}>
@@ -1390,7 +1463,7 @@ class ESPHomeUpdatePanel extends LitElement {
           ${merged.map((d) => this._renderDevice(d))}
         </div>
 
-        ${allResults.length > 0 ? this._renderResults(allResults) : ""}
+        ${allResults.length > 0 && !hideResults ? this._renderResults(allResults) : ""}
       </div>
     `;
   }
@@ -1536,3 +1609,38 @@ if (!customElements.get("esphome-update-panel")) {
     }
   });
 })();
+
+class ESPHomeUpdateCard extends HTMLElement {
+  setConfig(config) {
+    this._config = config;
+  }
+
+  set hass(hass) {
+    if (!this._panel) {
+      this._panel = document.createElement("esphome-update-panel");
+      this._panel.cardMode = true;
+      this._panel.cardConfig = this._config;
+      this.appendChild(this._panel);
+
+      this.style.display = "block";
+      if (this._config.max_width) this.style.maxWidth = this._config.max_width;
+      if (this._config.max_height) {
+        this.style.maxHeight = this._config.max_height;
+        this.style.overflow = "auto";
+      }
+
+      const align = this._config.align || "left";
+      if (align === "center") this.style.margin = "0 auto";
+      else if (align === "right") this.style.marginLeft = "auto";
+    }
+    this._panel.hass = hass;
+  }
+
+  getCardSize() {
+    return 6;
+  }
+}
+
+if (!customElements.get("esphome-update-card")) {
+  customElements.define("esphome-update-card", ESPHomeUpdateCard);
+}
