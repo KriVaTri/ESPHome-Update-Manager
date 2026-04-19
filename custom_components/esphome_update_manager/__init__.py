@@ -346,9 +346,26 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     # Always setup status listener for project version check
     hass.async_create_task(_delayed_setup_status_listener(hass))
-    
+
+    # Register as lovelace resource
+    url = "/local/esphome-update-manager/esphome-update-panel.js"
+    await _register_lovelace_resource(hass, url)
+
     return True
 
+async def _register_lovelace_resource(hass, url):
+    try:
+        resources = hass.data.get("lovelace_resources")
+        if resources is None:
+            return
+
+        for item in resources.async_items():
+            if item.get("url") == url:
+                return
+
+        await resources.async_create_item({"res_type": "module", "url": url})
+    except Exception:
+        pass
 
 async def _delayed_setup_status_listener(hass: HomeAssistant) -> None:
     """Setup status listener always (for project version check)."""
