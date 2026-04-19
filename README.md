@@ -141,11 +141,11 @@ All options are optional — the card works out of the box without any configura
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `title` | string | *none* | Display a custom title at the top of the card |
+| `show_header` | boolean | `false` | Show the full panel header with logo inside the card |
 | `compact` | boolean | `false` | Use smaller fonts and padding for a more compact layout |
-| `hide_results` | boolean | `false` | Hide the update results section |
 | `hide_addon_option` | boolean | `false` | Hide the add-on stop/start option |
 | `hide_auto_update` | boolean | `false` | Hide the automatic update toggle |
-| `show_header` | boolean | `false` | Show the full panel header with logo inside the card |
+| `hide_results` | boolean | `false` | Hide the update results section |
 | `max_width` | string | *none* | Maximum width of the card (e.g. `900px`) |
 | `max_height` | string | *none* | Maximum height of the card — content will scroll (e.g. `600px`) |
 | `align` | string | `left` | Card alignment: `left`, `center`, or `right` |
