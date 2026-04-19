@@ -157,9 +157,9 @@ type: custom:esphome-update-card
 title: "ESP Updates"
 show_header: false
 compact: true
-hide_results: true
 hide_addon_option: true
 hide_auto_update: true
+hide_results: true
 max_width: 900px
 max_height: 600px
 align: center
