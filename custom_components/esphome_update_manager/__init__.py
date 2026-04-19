@@ -355,8 +355,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 async def _register_lovelace_resource(hass, url):
     try:
-        resources = hass.data.get("lovelace_resources")
+        lovelace_data = hass.data.get("lovelace")
+        if lovelace_data is None:
+            _LOGGER.warning("Could not auto-register lovelace resource. Add manually: %s", url)
+            return
+
+        resources = getattr(lovelace_data, "resources", None)
         if resources is None:
+            _LOGGER.warning("Could not auto-register lovelace resource (no resources collection). Add manually: %s", url)
             return
 
         for item in resources.async_items():
@@ -364,8 +370,9 @@ async def _register_lovelace_resource(hass, url):
                 return
 
         await resources.async_create_item({"res_type": "module", "url": url})
-    except Exception:
-        pass
+        _LOGGER.info("Registered lovelace resource: %s", url)
+    except Exception as err:
+        _LOGGER.warning("Failed to register lovelace resource: %s", err)
 
 async def _delayed_setup_status_listener(hass: HomeAssistant) -> None:
     """Setup status listener always (for project version check)."""
