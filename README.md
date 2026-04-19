@@ -16,6 +16,7 @@ A custom Home Assistant integration that provides a dedicated panel for managing
 - [Installation](#installation)
 - [Configuration](#configuration)
   - [External Dashboard Setup](#external-dashboard-setup)
+- [Dashboard Card](#dashboard-card)
 - [Usage](#usage)
   - [Device list](#device-list)
   - [Device button](#device-button)
@@ -124,6 +125,47 @@ When using an external dashboard, you can have devices managed by both the local
 - If the external dashboard becomes unreachable, affected devices show "Unavailable" status
 - The panel automatically updates within ~1 minute when the dashboard comes back online
 - Auto-update triggers automatically when the dashboard comes online with pending updates
+
+## Dashboard Card
+
+ESPHome Update Manager can also be used as a Lovelace dashboard card:
+
+```yaml
+type: custom:esphome-update-card
+```
+
+### Card Configuration Options
+
+All options are optional — the card works out of the box without any configuration.
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `title` | string | *none* | Display a custom title at the top of the card |
+| `compact` | boolean | `false` | Use smaller fonts and padding for a more compact layout |
+| `hide_results` | boolean | `false` | Hide the update results section |
+| `hide_addon_option` | boolean | `false` | Hide the add-on stop/start option |
+| `hide_auto_update` | boolean | `false` | Hide the automatic update toggle |
+| `show_header` | boolean | `false` | Show the full panel header with logo inside the card |
+| `max_width` | string | *none* | Maximum width of the card (e.g. `900px`) |
+| `max_height` | string | *none* | Maximum height of the card — content will scroll (e.g. `600px`) |
+| `align` | string | `left` | Card alignment: `left`, `center`, or `right` |
+
+### Example
+
+```yaml
+type: custom:esphome-update-card
+title: "ESP Updates"
+show_header: false
+compact: true
+hide_results: true
+hide_addon_option: true
+hide_auto_update: true
+max_width: 900px
+max_height: 600px
+align: center
+```
+
+> **Note:** The card shares all functionality with the panel — updates, force install, cancel, and log viewing all work the same way. The log menu (⋮) is accessible via the toolbar inside the card.
 
 ## Usage
 
