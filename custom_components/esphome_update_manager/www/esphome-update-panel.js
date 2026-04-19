@@ -1385,7 +1385,7 @@ render() {
         
         ${showToolbar ? html`
           <div class="toolbar ${this._forceInstallMode ? 'force-mode' : ''}">
-            ${this.cardMode ? html`
+            ${this.cardMode && !cfg.show_header ? html`
               <div class="header-menu-container" style="position: absolute; right: 8px;">
                 <button class="menu-btn" @click=${this._toggleMenu} title="View logs" style="color: #333; font-size: 24px;">⋮</button>
                 ${this._showMenu ? this._renderMenu() : ""}
