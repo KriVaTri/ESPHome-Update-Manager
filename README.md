@@ -166,7 +166,8 @@ align: center
 ```
 
 > **Note:**
-> The card shares all functionality with the panel — updates, force install, cancel, and log viewing all work the same way. The log menu (⋮) is accessible via the toolbar inside the card when header is hidden
+> The card shares all functionality with the panel — updates, force install, cancel, and log viewing all work the same way.
+> The log menu (⋮) is accessible via the toolbar inside the card when the header is hidden.
 
 ## Usage
 
