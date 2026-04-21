@@ -207,6 +207,13 @@ class ESPHomeUpdatePanel extends LitElement {
   }
 
   updated(changedProps) {
+    if (changedProps.has("cardMode")) {
+      if (this.cardMode) {
+        this.setAttribute('cardmode', '');
+      } else {
+        this.removeAttribute('cardmode');
+      }
+    }
     if (!changedProps.has("hass") || !this.hass) return;
     const prev = this._prevHassStates;
     const curr = this.hass.states;
@@ -964,6 +971,12 @@ class ESPHomeUpdatePanel extends LitElement {
         padding: 0;
         font-family: var(--paper-font-body1_-_font-family, "Roboto", sans-serif);
       }
+      :host(:not([cardmode])) {
+        height: 100vh;
+        overflow-y: auto;
+        overscroll-behavior-y: contain;
+        -webkit-overflow-scrolling: touch;
+      }
       .app-toolbar {
         display: flex;
         align-items: center;
@@ -1015,6 +1028,7 @@ class ESPHomeUpdatePanel extends LitElement {
         padding: 0 16px 16px;
         max-width: 1600px;
         margin: 0 auto;
+        overscroll-behavior: auto;
       }
       .header-menu-container { position: relative; }
       .menu-btn {
@@ -1088,7 +1102,7 @@ class ESPHomeUpdatePanel extends LitElement {
       .device-list { margin: 0; }
       .device-row {
         display: flex; align-items: center; gap: 12px;
-        padding: 10px 20px; border-bottom: 1px solid #555;
+        padding: 10px 20px 10px 19px; border-bottom: 1px solid #555;
         background: rgba(128,128,128,0.1);
       }
       .device-list-header {
@@ -1109,7 +1123,11 @@ class ESPHomeUpdatePanel extends LitElement {
       .version { color: #666; font-size: 0.85em; white-space: nowrap; }
       .version .arrow { color: #4caf50; font-weight: bold; }
       .checkbox-col { flex: 0 0 24px; display: flex; align-items: center; justify-content: center; }
-      .checkbox-col input { margin: 0; }
+      .checkbox-col input[type="checkbox"] {
+        margin: 0;
+        width: 14px;
+        height: 14px;
+      }
       .checkbox-col input:disabled { opacity: 0; }
       button {
         padding: 6px 16px; border: none; border-radius: 16px;
@@ -1131,14 +1149,22 @@ class ESPHomeUpdatePanel extends LitElement {
       .btn-offline { background: #666; color: white; opacity: 0.8; }
       .btn-skipped { background: #9c27b0; color: white; opacity: 0.8; }
       .btn-select-all {
+        flex: 0 0 24px;
+        width: 24px;
         background: transparent;
-        padding: 4px 0px;
+        padding: 0;
         cursor: pointer;
         display: flex;
         align-items: center;
         justify-content: center;
+        margin-left: -1px;
       }
-      .btn-select-all input[type="checkbox"] { margin: 4px; cursor: pointer; }
+      .btn-select-all input[type="checkbox"] {
+        margin: 0;
+        cursor: pointer;
+        width: 14px;
+        height: 14px;
+      }
       .btn-select-all input[type="checkbox"]:disabled { opacity: 0.6; filter: brightness(2); }
       .btn-batch-update { background: #2196f3; color: white; }
       .btn-batch-update:hover:not(:disabled) { background: #1976d2; }
@@ -1166,7 +1192,11 @@ class ESPHomeUpdatePanel extends LitElement {
         background: #2a2a2a; border-radius: 8px;
         font-size: 0.9em; color: #ccc;
       }
-      .addon-option input[type="checkbox"] { margin: 0; }
+      .addon-option input[type="checkbox"] {
+        margin: 0;
+        width: 14px;
+        height: 14px;
+      }
       .addon-option .addon-name { color: #ff9800; font-weight: 500; }
       .addon-option .addon-status { margin-left: auto; font-size: 0.85em; }
       .addon-running { color: #4caf50; }
@@ -1243,7 +1273,7 @@ class ESPHomeUpdatePanel extends LitElement {
         color: var(--primary-text-color);
       }
       .content.compact .device-row {
-        padding: 6px 12px;
+        padding: 6px 12px 6px 11px;
         gap: 8px;
       }
       .content.compact .addon-option {
@@ -1251,7 +1281,7 @@ class ESPHomeUpdatePanel extends LitElement {
         font-size: 0.8em;
       }
       .content.compact .toolbar {
-        padding: 4px 8px;
+        padding: 4px 12px;
         margin: 4px 0;
       }
       .content.compact button {
@@ -1275,15 +1305,28 @@ class ESPHomeUpdatePanel extends LitElement {
         font-size: 1em;
         padding: 8px 4px 2px;
       }
+      .content.compact .checkbox-col input[type="checkbox"],
+      .content.compact .btn-select-all input[type="checkbox"],
+      .content.compact .addon-option input[type="checkbox"] {
+        width: 13.5px;
+        height: 13.5px;
+      }
       @media (max-width: 600px) and (pointer: coarse) {
+        .checkbox-col input[type="checkbox"],
+        .addon-option input[type="checkbox"] {
+          width: 14px;
+          height: 14px;
+          min-width: 14px;
+          min-height: 14px;
+        }
         .btn-select-all input[type="checkbox"] {
-          width: 18px;
-          height: 18px;
-          min-width: 18px;
-          min-height: 18px;
+          width: 14.5px;
+          height: 14.5px;
+          min-width: 14.5px;
+          min-height: 14.5px;
         }
         .content { padding-left: 0; padding-right: 0; }
-        .device-row { padding-left: 10px; padding-right: 10px; }
+        .device-row { padding-left: 9px; padding-right: 10px; }
         .toolbar { margin-left: 0; padding-left: 10px; }
         .addon-option { padding-left: 14px; padding-right: 14px; }
         .result-row { padding-left: 10px; padding-right: 10px; }
@@ -1619,6 +1662,7 @@ class ESPHomeUpdateCard extends HTMLElement {
     if (!this._panel) {
       this._panel = document.createElement("esphome-update-panel");
       this._panel.cardMode = true;
+      this._panel.setAttribute('cardmode', '');
       this._panel.cardConfig = this._config;
       this.appendChild(this._panel);
 
