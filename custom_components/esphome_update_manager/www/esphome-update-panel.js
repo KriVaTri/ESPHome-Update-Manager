@@ -971,6 +971,9 @@ class ESPHomeUpdatePanel extends LitElement {
         padding: 0;
         font-family: var(--paper-font-body1_-_font-family, "Roboto", sans-serif);
       }
+      :host([cardmode]) .addon-option {
+        padding: 5px 24px;
+      }
       :host(:not([cardmode])) {
         height: 100vh;
         overflow-y: auto;
@@ -1325,10 +1328,15 @@ class ESPHomeUpdatePanel extends LitElement {
           min-width: 14.5px;
           min-height: 14.5px;
         }
+        .content.compact .device-row { padding-left: 9px; padding-right: 10px; }
+        .content.compact .toolbar { padding-left: 10px; }
+        .content.compact .addon-option { padding-left: 14px; padding-right: 14px; }
         .content { padding-left: 0; padding-right: 0; }
         .device-row { padding-left: 9px; padding-right: 10px; }
         .toolbar { margin-left: 0; padding-left: 10px; }
         .addon-option { padding-left: 14px; padding-right: 14px; }
+        :host([cardmode]) .addon-option { padding: 5px 14px; }
+        .content.compact .addon-option { padding-left: 14px; padding-right: 14px; }
         .result-row { padding-left: 10px; padding-right: 10px; }
         .name { cursor: pointer; }
       }
