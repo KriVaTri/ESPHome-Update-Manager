@@ -977,7 +977,6 @@ class ESPHomeUpdatePanel extends LitElement {
       :host(:not([cardmode])) {
         height: 100vh;
         overflow-y: auto;
-        overscroll-behavior-y: contain;
         -webkit-overflow-scrolling: touch;
       }
       .app-toolbar {
