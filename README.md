@@ -396,7 +396,7 @@ When one or more updates fail, a persistent notification is created in Home Assi
 
 Clicking the link opens the panel and automatically displays the latest update log.
 
-<img width="500" height="401" alt="log" src="https://github.com/user-attachments/assets/6d978086-a895-42e7-a0d2-6824f66563af" />
+<img width="500" height="389" alt="log" src="https://github.com/user-attachments/assets/c3f5c8c2-d1f0-4ed4-8224-71bf30eaf17f" />
 
 ## Error handling
 
@@ -426,15 +426,15 @@ The integration handles various failure scenarios gracefully:
 
 ### Update ready to install
 
-<img width="700" height="460" alt="update1" src="https://github.com/user-attachments/assets/0b44677e-5030-4424-8bca-ff5f369c8b76" />
+<img width="500" height="552" alt="update-1" src="https://github.com/user-attachments/assets/ad3cea07-2be3-4a88-9ebf-8840e678e20c" />
 
 ### Update in progress
 
-<img width="700" height="460" alt="update2" src="https://github.com/user-attachments/assets/fd477355-7e30-43c3-bebd-8205e7cf50e8" />
+<img width="500" height="552" alt="update-2" src="https://github.com/user-attachments/assets/aac1287d-f524-46ce-9ee1-0b6717d33010" />
 
 ### Update successful
 
-<img width="700" height="460" alt="update3" src="https://github.com/user-attachments/assets/74513810-cfb9-4810-abb6-08f32e90a7c6" />
+<img width="500" height="552" alt="update-5" src="https://github.com/user-attachments/assets/d010fd7a-d3c0-443f-b02b-ed96d3c77227" />
 
 ## Troubleshooting
 
