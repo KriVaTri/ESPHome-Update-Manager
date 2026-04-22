@@ -1384,7 +1384,7 @@ render() {
           ` : ""}
 
           <h1>
-            <img src="/local/esphome-update-manager/logo.png"
+            <img src="/esphome_update_manager_static/brand/logo.png"
                 style="height: 40px; vertical-align: middle; margin-right: 12px;">
             ESPHome Update Manager
             <span class="header-spacer"></span>
