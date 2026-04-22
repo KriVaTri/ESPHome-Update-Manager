@@ -47,17 +47,29 @@ STORAGE_VERSION = 1
 LOG_FILENAME = "update_log.txt"
 LOG_BACKUP_DIR = "log-backups"
 
+# Directory name under <config>/ for logs and user-visible data
+DATA_DIR_NAME = "esphome_update_manager"
+
+# URL path for serving frontend files (JS, logo, lit library)
+# Served directly from custom_components/esphome_update_manager/www/
+FRONTEND_URL_PREFIX = "/esphome_update_manager_static"
+
 CONFIG_SCHEMA = cv.empty_config_schema(DOMAIN)
+
+
+def _get_data_dir(hass: HomeAssistant) -> Path:
+    """Get the path to the integration data directory (logs, backups)."""
+    return Path(hass.config.path(DATA_DIR_NAME))
 
 
 def _get_log_path(hass: HomeAssistant) -> Path:
     """Get the path to the update log file."""
-    return Path(hass.config.path("www")) / "esphome-update-manager" / LOG_FILENAME
+    return _get_data_dir(hass) / LOG_FILENAME
 
 
 def _get_log_backup_dir(hass: HomeAssistant) -> Path:
     """Get the path to the log backup directory."""
-    return Path(hass.config.path("www")) / "esphome-update-manager" / LOG_BACKUP_DIR
+    return _get_data_dir(hass) / LOG_BACKUP_DIR
 
 
 async def async_setup(hass: HomeAssistant, config: dict) -> bool:
@@ -227,12 +239,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     websocket_api.async_register_command(hass, ws_subscribe_dashboard_status)
     websocket_api.async_register_command(hass, ws_subscribe_devices_updated)
 
-    # Copy frontend files to www
-    source = Path(__file__).parent / "www" / "esphome-update-panel.js"
-    dest_dir = Path(hass.config.path("www")) / "esphome-update-manager"
-    dest = dest_dir / "esphome-update-panel.js"
+    # Register static paths to serve frontend files directly from the
+    # custom_components folder. This avoids any dependency on <config>/www/.
+    frontend_source_dir = Path(__file__).parent / "www"
+    brand_source_dir = Path(__file__).parent / "brand"
+    await _register_frontend_static_path(hass, frontend_source_dir)
+    await _register_static_path(hass, f"{FRONTEND_URL_PREFIX}/brand", brand_source_dir)
 
-    await hass.async_add_executor_job(_copy_frontend, source, dest_dir, dest)
+    # Migrate logs from old <config>/www/esphome-update-manager/ location
+    # to the new <config>/esphome_update_manager/ location.
+    await hass.async_add_executor_job(_migrate_logs_from_www, hass)
 
     # Read version from manifest.json
     manifest_path = Path(__file__).parent / "manifest.json"
@@ -250,7 +266,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             config={
                 "_panel_custom": {
                     "name": "esphome-update-panel",
-                    "module_url": f"/local/esphome-update-manager/esphome-update-panel.js?v={version}",
+                    "module_url": f"{FRONTEND_URL_PREFIX}/esphome-update-panel.js?v={version}",
                 }
             },
         )
@@ -348,7 +364,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.async_create_task(_delayed_setup_status_listener(hass))
 
     # Register as lovelace resource
-    url = "/local/esphome-update-manager/esphome-update-panel.js"
+    url = f"{FRONTEND_URL_PREFIX}/esphome-update-panel.js?v={version}"
     await _register_lovelace_resource(hass, url)
 
     return True
@@ -365,9 +381,31 @@ async def _register_lovelace_resource(hass, url):
             _LOGGER.warning("Could not auto-register lovelace resource (no resources collection). Add manually: %s", url)
             return
 
+        # Find existing resources that belong to us
+        existing_ours = []
+        already_correct = False
         for item in resources.async_items():
-            if item.get("url") == url:
-                return
+            item_url = item.get("url", "")
+            # Match any old or new URL pointing to our panel
+            if (
+                "esphome-update-manager/esphome-update-panel.js" in item_url  # old /local/ URL
+                or "esphome_update_manager_static/esphome-update-panel.js" in item_url  # new URL (any version)
+            ):
+                if item_url == url:
+                    already_correct = True
+                else:
+                    existing_ours.append(item)
+
+        # Remove stale/outdated resource entries (old URL or old version)
+        for item in existing_ours:
+            try:
+                await resources.async_delete_item(item["id"])
+                _LOGGER.info("Removed outdated lovelace resource: %s", item.get("url"))
+            except Exception as err:
+                _LOGGER.debug("Could not remove stale resource %s: %s", item.get("url"), err)
+
+        if already_correct:
+            return
 
         await resources.async_create_item({"res_type": "module", "url": url})
         _LOGGER.info("Registered lovelace resource: %s", url)
@@ -476,22 +514,93 @@ async def _delayed_setup_auto_update(hass: HomeAssistant) -> None:
     async_at_started(hass, _setup_after_start)
 
 
-def _copy_frontend(source: Path, dest_dir: Path, dest: Path) -> None:
-    """Copy frontend panel files to www directory."""
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(source, dest)
+async def _register_static_path(hass: HomeAssistant, url_path: str, source_dir: Path) -> None:
+    """Register a static path for serving files from a directory."""
+    if not source_dir.exists():
+        _LOGGER.debug("Static path source directory does not exist, skipping: %s", source_dir)
+        return
 
-    logo_source = source.parent.parent / "brand" / "logo.png"
-    if logo_source.exists():
-        shutil.copy2(logo_source, dest_dir / "logo.png")
+    try:
+        # Modern API (HA 2024.7+)
+        from homeassistant.components.http import StaticPathConfig
+        await hass.http.async_register_static_paths([
+            StaticPathConfig(url_path, str(source_dir), cache_headers=False)
+        ])
+        _LOGGER.debug("Registered static path %s -> %s", url_path, source_dir)
+        return
+    except ImportError:
+        pass
+    except Exception as err:
+        _LOGGER.debug("async_register_static_paths failed for %s, falling back: %s", url_path, err)
 
-    # Copy bundled lit-element library
-    lib_source = source.parent / "lit"
-    lib_dest = dest_dir / "lit"
-    if lib_source.exists():
-        if lib_dest.exists():
-            shutil.rmtree(lib_dest)
-        shutil.copytree(lib_source, lib_dest)
+    # Fallback for older HA versions
+    try:
+        hass.http.register_static_path(url_path, str(source_dir), cache_headers=False)
+        _LOGGER.debug("Registered static path (legacy) %s -> %s", url_path, source_dir)
+    except Exception as err:
+        _LOGGER.error("Failed to register static path %s: %s", url_path, err)
+
+
+async def _register_frontend_static_path(hass: HomeAssistant, source_dir: Path) -> None:
+    """Register the main frontend static path."""
+    await _register_static_path(hass, FRONTEND_URL_PREFIX, source_dir)
+
+
+def _migrate_logs_from_www(hass: HomeAssistant) -> None:
+    """Migrate logs and backups from old <config>/www/esphome-update-manager/
+    to the new <config>/esphome_update_manager/ location.
+
+    Also cleans up old frontend files (js, logo, lit) that were previously
+    copied to www/ but are no longer used.
+    """
+    old_dir = Path(hass.config.path("www")) / "esphome-update-manager"
+    new_dir = _get_data_dir(hass)
+
+    if not old_dir.exists():
+        return
+
+    try:
+        new_dir.mkdir(parents=True, exist_ok=True)
+
+        # Migrate main log file
+        old_log = old_dir / LOG_FILENAME
+        new_log = new_dir / LOG_FILENAME
+        if old_log.exists() and not new_log.exists():
+            shutil.move(str(old_log), str(new_log))
+            _LOGGER.info("Migrated update log to %s", new_log)
+
+        # Migrate backup directory
+        old_backups = old_dir / LOG_BACKUP_DIR
+        new_backups = new_dir / LOG_BACKUP_DIR
+        if old_backups.exists() and not new_backups.exists():
+            shutil.move(str(old_backups), str(new_backups))
+            _LOGGER.info("Migrated log backups to %s", new_backups)
+
+        # Clean up stale frontend files we used to copy there
+        for stale in ("esphome-update-panel.js", "logo.png"):
+            f = old_dir / stale
+            if f.exists():
+                try:
+                    f.unlink()
+                except Exception as err:
+                    _LOGGER.debug("Could not remove stale file %s: %s", f, err)
+
+        lit_dir = old_dir / "lit"
+        if lit_dir.exists():
+            try:
+                shutil.rmtree(lit_dir)
+            except Exception as err:
+                _LOGGER.debug("Could not remove stale lit dir: %s", err)
+
+        # Remove old directory if now empty
+        try:
+            if old_dir.exists() and not any(old_dir.iterdir()):
+                old_dir.rmdir()
+                _LOGGER.info("Removed empty legacy directory %s", old_dir)
+        except Exception as err:
+            _LOGGER.debug("Could not remove old dir %s: %s", old_dir, err)
+    except Exception as err:
+        _LOGGER.warning("Log migration from www/ failed: %s", err)
 
 
 def _read_manifest(manifest_path: Path) -> dict:
@@ -721,20 +830,26 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Handle removal of the config entry."""
     _LOGGER.info("Removing ESPHome Update Manager - cleaning up files")
-    
-    # Remove www files
-    www_dir = Path(hass.config.path("www")) / "esphome-update-manager"
-    if await hass.async_add_executor_job(www_dir.exists):
-        await hass.async_add_executor_job(shutil.rmtree, www_dir)
-        _LOGGER.info("Removed www directory: %s", www_dir)
-    
+
+    # Remove new data directory (logs + backups)
+    data_dir = _get_data_dir(hass)
+    if await hass.async_add_executor_job(data_dir.exists):
+        await hass.async_add_executor_job(shutil.rmtree, data_dir)
+        _LOGGER.info("Removed data directory: %s", data_dir)
+
+    # Also clean up any legacy files still present in <config>/www/
+    legacy_dir = Path(hass.config.path("www")) / "esphome-update-manager"
+    if await hass.async_add_executor_job(legacy_dir.exists):
+        await hass.async_add_executor_job(shutil.rmtree, legacy_dir)
+        _LOGGER.info("Removed legacy www directory: %s", legacy_dir)
+
     # Remove storage file
     storage_path = Path(hass.config.path(".storage")) / STORAGE_KEY
     if await hass.async_add_executor_job(storage_path.exists):
         await hass.async_add_executor_job(storage_path.unlink)
         _LOGGER.info("Removed storage file: %s", storage_path)
-        
-        
+
+
 # ── Auto-update logic ──────────────────────────────────────────────
 
 def _get_esphome_device_ids(hass: HomeAssistant) -> set[str]:
@@ -2410,7 +2525,6 @@ async def ws_get_update_log(hass, connection, msg):
     connection.send_result(msg["id"], {
         "exists": content is not None,
         "content": content,
-        "url": f"/local/esphome-update-manager/{LOG_FILENAME}",
     })
 
 
