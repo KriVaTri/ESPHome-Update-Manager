@@ -475,7 +475,7 @@ The integration handles various failure scenarios gracefully:
 
 ### Auto-update does not trigger
 - Ensure the "Automatically start updates when available" checkbox is enabled
-- Check that your devices have the `binary_sensor.status` entity (see Recommendations)
+- Check that your devices have the `binary_sensor.status` entity (see [Recommendations](#recommendations))
 - Auto-update only triggers on state transitions (e.g., device coming online), not when already in "update available" state
 - Check Home Assistant logs for `esphome_update_manager` entries
 
