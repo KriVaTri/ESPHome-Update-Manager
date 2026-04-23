@@ -1101,14 +1101,17 @@ class ESPHomeUpdatePanel extends LitElement {
       .toolbar-info { flex: 1; color: #333; font-size: 0.9em; }
       .toolbar.force-mode .toolbar-info { color: #fff; }
       .toolbar.header-menu { font-size: 14px; }
-      .device-list { margin: 0; }
+      .device-list {
+        margin: 0;
+        border-bottom: 1px solid var(--secondary-text-color, #888);
+      }
       .device-row {
         display: flex; align-items: center; gap: 12px;
-        padding: 10px 20px 10px 19px; border-bottom: 1px solid #555;
+        padding: 8px 20px 8px 19px; border-bottom: 1px solid #555;
         background: rgba(128,128,128,0.1);
       }
       .device-list-header {
-        border-bottom: 1.5px solid var(--secondary-text-color, #888);
+        border-bottom: 1px solid var(--secondary-text-color, #888);
         font-size: 1em;
         text-transform: uppercase;
         letter-spacing: 0.5px;
