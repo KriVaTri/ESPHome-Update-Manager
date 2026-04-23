@@ -3,7 +3,7 @@
     "name": "ESPHome Update Manager",
     "codeowners": ["@KriVaTri"],
     "config_flow": true,
-    "dependencies": ["esphome"],
+    "dependencies": ["esphome", "http"],
     "documentation": "https://github.com/KriVaTri/esphome-update-manager#readme",
     "integration_type": "service",
     "iot_class": "local_polling",
