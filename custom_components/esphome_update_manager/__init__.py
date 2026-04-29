@@ -1716,15 +1716,44 @@ def _is_device_online(
     ent_reg: er.EntityRegistry,
     device_id: str | None,
 ) -> bool | None:
+    """Determine online status with fallback chain.
+
+    Priority:
+    1. ESPHome 'status' binary_sensor (user-configured, fastest, most reliable)
+    2. Fallback: ESPHome integration runtime_data.available (native API connection)
+    3. None (unknown)
+    """
     if not device_id:
         return None
+
+    # 1. Status sensor (primary — always correct when present and available)
     status_entity_id = _find_status_entity(hass, ent_reg, device_id)
-    if not status_entity_id:
+    if status_entity_id:
+        state = hass.states.get(status_entity_id)
+        if state is not None and state.state not in ("unavailable", "unknown"):
+            return state.state == "on"
+        # status sensor exists but is unavailable/unknown → fall through to fallback
+
+    # 2. Fallback: ESPHome runtime_data.available (works for both local and external devices,
+    #    as long as the device is part of the ESPHome integration in HA)
+    dev_reg = dr.async_get(hass)
+    device = dev_reg.async_get(device_id)
+    if device is None:
         return None
-    state = hass.states.get(status_entity_id)
-    if state is None or state.state in ("unavailable", "unknown"):
-        return None
-    return state.state == "on"
+
+    try:
+        for entry in hass.config_entries.async_entries("esphome"):
+            if entry.entry_id in device.config_entries:
+                runtime_data = getattr(entry, "runtime_data", None)
+                if runtime_data is not None:
+                    available = getattr(runtime_data, "available", None)
+                    if available is not None:
+                        return bool(available)
+                break
+    except Exception as err:
+        _LOGGER.debug("runtime_data lookup failed for device %s: %s", device_id, err)
+
+    return None
 
 
 def _get_device_sw_version(
