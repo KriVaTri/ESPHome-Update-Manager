@@ -66,13 +66,14 @@ A custom Home Assistant integration that provides a dedicated panel for managing
 
 ## Recommendations
 
-- Add the following binary_sensor to your device yaml file for improved integration performance and functionality (online status):
+- Add the following to the device's YAML for **fast and reliable online status detection** (much faster than the default ESPHome builder detection):
   
   ```yaml
   binary_sensor:
     - platform: status
       name: "Status"
   ```
+> **Note:** Without this binary_sensor, the status of the device will be shown yellow in the panel 🟡 = unknown status
 
 ## Installation
 
