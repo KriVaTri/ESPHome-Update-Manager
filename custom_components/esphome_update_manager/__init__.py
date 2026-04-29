@@ -8,7 +8,7 @@ import re
 import asyncio
 from typing import Any
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import voluptuous as vol
 
@@ -21,7 +21,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import config_validation as cv
-from homeassistant.helpers.event import async_track_state_change_event
+from homeassistant.helpers.event import async_track_state_change_event, async_track_time_interval
 from homeassistant.helpers.storage import Store
 from homeassistant.helpers.start import async_at_started
 
@@ -223,6 +223,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         _handle_device_registry_updated,
     )
     hass.data[DOMAIN]["unsub_device_registry"] = unsub_device_registry
+
+    @callback
+    def _periodic_device_refresh(_now) -> None:
+        """Periodically notify frontend so runtime_data fallback updates are picked up."""
+        hass.bus.async_fire("esphome_update_manager_devices_updated")
+
+    unsub_periodic = async_track_time_interval(
+        hass, _periodic_device_refresh, timedelta(seconds=60)
+    )
+    hass.data[DOMAIN]["unsub_periodic_refresh"] = unsub_periodic
 
     websocket_api.async_register_command(hass, ws_get_devices)
     websocket_api.async_register_command(hass, ws_start_updates)
@@ -809,6 +819,10 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if unsub_device_registry:
         unsub_device_registry()
     hass.data[DOMAIN].pop("unsub_device_registry", None)
+    unsub_periodic = hass.data[DOMAIN].get("unsub_periodic_refresh")
+    if unsub_periodic:
+        unsub_periodic()
+    hass.data[DOMAIN].pop("unsub_periodic_refresh", None)
 
     # Remove services
     hass.services.async_remove(DOMAIN, "start_updates")
