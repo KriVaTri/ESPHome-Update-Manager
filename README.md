@@ -66,14 +66,25 @@ A custom Home Assistant integration that provides a dedicated panel for managing
 
 ## Recommendations
 
-- Add the following to the device's YAML for **fast and reliable online status detection** (much faster than the default ESPHome builder detection):
+- Add the following to the device's YAML for **fast and reliable online status detection**:
   
   ```yaml
   binary_sensor:
     - platform: status
       name: "Status"
   ```
-> **Note:** Without this binary_sensor, the status of the device will be shown yellow in the panel 🟡 = unknown status
+
+  This sensor reports the device's online state instantly to Home Assistant.
+
+> **Note on online status detection:**
+>
+> The integration uses a fallback chain to determine each device's online status:
+>
+> 1. **`status` binary_sensor** *(recommended)* — instant and reliable detection of online/offline transitions.
+> 2. **ESPHome integration fallback** — if no status sensor is configured, the integration falls back to the ESPHome native API connection state, but is **significantly slower and less reliable**: it can take up to several minutes before a disconnected device is detected as offline, due to the keepalive timeout of the ESPHome API.
+> 3. **Unknown** 🟡 — shown when neither source can determine the status.
+>
+> For best results, always add the `status` binary_sensor to your devices.
 
 ## Installation
 
