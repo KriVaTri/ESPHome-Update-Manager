@@ -218,6 +218,23 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 hass.async_create_task(store.async_save(settings))
             _LOGGER.debug("Removed %d stale remembered external devices after device removal", len(to_remove))
 
+        # Cleanup pending_force_installs that no longer exist in HA
+        pending_fi: dict = settings.get("pending_force_installs", {})
+        if pending_fi:
+            to_remove_fi = [
+                did for did in pending_fi
+                if dev_reg.async_get(did) is None
+            ]
+            if to_remove_fi:
+                for did in to_remove_fi:
+                    del pending_fi[did]
+                settings["pending_force_installs"] = pending_fi
+                hass.data[DOMAIN]["settings"] = settings
+                store: Store = hass.data[DOMAIN].get("store")
+                if store:
+                    hass.async_create_task(store.async_save(settings))
+                _LOGGER.debug("Removed %d stale pending force installs after device removal", len(to_remove_fi))
+
     unsub_device_registry = hass.bus.async_listen(
         dr.EVENT_DEVICE_REGISTRY_UPDATED,
         _handle_device_registry_updated,
@@ -226,8 +243,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     @callback
     def _periodic_device_refresh(_now) -> None:
-        """Periodically notify frontend so runtime_data fallback updates are picked up."""
+        """Periodically notify frontend so runtime_data fallback updates are picked up
+        and check pending force installs (for devices without status sensor)."""
         hass.bus.async_fire("esphome_update_manager_devices_updated")
+        hass.async_create_task(_check_pending_force_installs(hass))
 
     unsub_periodic = async_track_time_interval(
         hass, _periodic_device_refresh, timedelta(seconds=60)
@@ -248,6 +267,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     websocket_api.async_register_command(hass, ws_get_log_backup)
     websocket_api.async_register_command(hass, ws_subscribe_dashboard_status)
     websocket_api.async_register_command(hass, ws_subscribe_devices_updated)
+    websocket_api.async_register_command(hass, ws_add_pending_force_install)
+    websocket_api.async_register_command(hass, ws_remove_pending_force_install)
 
     # Register static paths to serve frontend files directly from the
     # custom_components folder. This avoids any dependency on <config>/www/.
@@ -336,6 +357,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         if failed_count > 0:
             await _send_failure_notification(hass, results, failed_count)
     
+        # Trigger pending force installs check (a device may have come online during the run)
+        hass.async_create_task(_check_pending_force_installs(hass))
+
     unsub_finished = hass.bus.async_listen("esphome_update_manager_finished", _handle_update_finished)
     hass.data[DOMAIN]["unsub_finished"] = unsub_finished
 
@@ -468,6 +492,7 @@ async def _setup_always_on_status_listener(hass: HomeAssistant) -> None:
         async def _delayed_check():
             await asyncio.sleep(5)
             await _check_project_version_update(hass, entity_id)
+            await _check_pending_force_installs(hass)
 
         hass.async_create_task(_delayed_check())
 
@@ -486,6 +511,7 @@ async def _setup_always_on_status_listener(hass: HomeAssistant) -> None:
             return
         _LOGGER.debug("External dashboard came online - checking all online devices for project version updates")
         hass.async_create_task(_check_all_online_devices())
+        hass.async_create_task(_check_pending_force_installs(hass))
 
     unsub = async_track_state_change_event(
         hass,
@@ -838,6 +864,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data[DOMAIN].pop("failed_devices", None)
     hass.data[DOMAIN].pop("pending_project_installs", None)
     hass.data[DOMAIN].pop("pending_project_install_timer", None)
+    hass.data[DOMAIN].pop("pending_force_install_timer", None)
+    hass.data[DOMAIN].pop("pending_force_install_retry", None)
     return True
 
 
@@ -1400,7 +1428,12 @@ async def async_handle_start_updates(hass: HomeAssistant, call: ServiceCall) -> 
         _LOGGER.warning("Failed to start updates via service: %s", err)
 
 async def async_handle_force_install(hass: HomeAssistant, call: ServiceCall) -> None:
-    """Handle the force_install service call."""
+    """Handle the force_install service call.
+
+    Online devices are force-installed immediately.
+    Offline devices are added to the pending_force_installs list and will
+    be force-installed automatically once they come online.
+    """
     device_ids = call.data.get("device_id")
     if not device_ids:
         raise HomeAssistantError("No device_id provided")
@@ -1410,8 +1443,11 @@ async def async_handle_force_install(hass: HomeAssistant, call: ServiceCall) -> 
 
     device_ids = list(dict.fromkeys(device_ids))
 
+    ent_reg = er.async_get(hass)
     dev_reg = dr.async_get(hass)
-    force_install_devices = []
+
+    online_devices: list[dict] = []
+    offline_device_ids: list[str] = []
 
     for device_id in device_ids:
         device = dev_reg.async_get(device_id)
@@ -1422,23 +1458,72 @@ async def async_handle_force_install(hass: HomeAssistant, call: ServiceCall) -> 
 
         name = device.name_by_user or device.name or device_id
         raw = device.sw_version
-        force_install_devices.append({
-            "entity_id": f"force:{_normalize_device_name(name)}",
-            "device_id": device_id,
-            "name": name,
-            "from_version": raw,
-            "to_version": raw,
-        })
 
-    if not force_install_devices:
+        # Split into online vs offline
+        if _is_device_online(hass, ent_reg, device_id) is True:
+            online_devices.append({
+                "entity_id": f"force:{_normalize_device_name(name)}",
+                "device_id": device_id,
+                "name": name,
+                "from_version": raw,
+                "to_version": raw,
+            })
+        else:
+            offline_device_ids.append(device_id)
+
+    if not online_devices and not offline_device_ids:
         raise HomeAssistantError("No valid devices found")
+
+    settings = hass.data[DOMAIN].get("settings", {})
+    store: Store = hass.data[DOMAIN].get("store")
+
+    # Save offline devices to pending_force_installs
+    if offline_device_ids:
+        pending: dict = settings.get("pending_force_installs", {})
+        for did in offline_device_ids:
+            device = dev_reg.async_get(did)
+            if not device:
+                continue
+            pending[did] = {
+                "name": device.name_by_user or device.name or did,
+                "queued_at": datetime.now().isoformat(),
+            }
+        settings["pending_force_installs"] = pending
+        hass.data[DOMAIN]["settings"] = settings
+        if store:
+            await store.async_save(settings)
+        hass.bus.async_fire("esphome_update_manager_devices_updated")
+        _LOGGER.info(
+            "Added %d offline device(s) to pending force install list",
+            len(offline_device_ids),
+        )
+        # In case any are actually already online, trigger a check
+        hass.async_create_task(_check_pending_force_installs(hass))
+
+    # If there are no online devices, we are done
+    if not online_devices:
+        return
 
     queue: UpdateQueue = hass.data[DOMAIN]["queue"]
     if queue.is_running:
-        raise HomeAssistantError("Update queue is already running")
+        # Online devices can't run now → fall back to pending so they retry later
+        pending: dict = settings.get("pending_force_installs", {})
+        for d in online_devices:
+            pending[d["device_id"]] = {
+                "name": d["name"],
+                "queued_at": datetime.now().isoformat(),
+            }
+        settings["pending_force_installs"] = pending
+        hass.data[DOMAIN]["settings"] = settings
+        if store:
+            await store.async_save(settings)
+        hass.bus.async_fire("esphome_update_manager_devices_updated")
+        raise HomeAssistantError(
+            "Update queue is already running. "
+            f"{len(online_devices)} device(s) added to pending force install list."
+        )
 
     stop_addon_slug = None
-    settings = hass.data[DOMAIN].get("settings", {})
     if settings.get("stop_addon_during_update", True):
         addon_info = await async_get_addon_info(hass, VSCODE_ADDON_SLUG)
         if addon_info and addon_info.get("state") == "started":
@@ -1446,9 +1531,14 @@ async def async_handle_force_install(hass: HomeAssistant, call: ServiceCall) -> 
 
     try:
         queue.start(
-            entity_ids=[d["entity_id"] for d in force_install_devices],
-            force_install_devices=force_install_devices,
+            entity_ids=[d["entity_id"] for d in online_devices],
+            force_install_devices=online_devices,
             stop_addon_slug=stop_addon_slug,
+        )
+        _LOGGER.info(
+            "Started force install for %d online device(s): %s",
+            len(online_devices),
+            [d["name"] for d in online_devices],
         )
     except RuntimeError as err:
         raise HomeAssistantError(str(err)) from err
@@ -1853,7 +1943,7 @@ def _get_esphome_update_entities(hass: HomeAssistant) -> list[dict[str, Any]]:
     dev_reg = dr.async_get(hass)
     
     esphome_device_ids = _get_esphome_device_ids(hass)
-    
+
     # Get versions from both sources
     local_builder_version = _get_local_esphome_builder_version(hass)
     external_builder_version = _get_external_dashboard_version(hass)
@@ -1868,10 +1958,11 @@ def _get_esphome_update_entities(hass: HomeAssistant) -> list[dict[str, Any]]:
         and external_coordinator.available
     )
     
-    # Load remembered external devices from storage
+    # Load remembered external devices and pending force installs from storage
     settings = hass.data[DOMAIN].get("settings", {})
     remembered_external_devices: dict[str, bool] = dict(settings.get("external_devices", {}))
     remembered_external_devices_changed = False
+    pending_force_installs: dict = settings.get("pending_force_installs", {})
     
     # Get failed devices for marking
     failed_devices = hass.data[DOMAIN].get("failed_devices", {})
@@ -2010,6 +2101,7 @@ def _get_esphome_update_entities(hass: HomeAssistant) -> list[dict[str, Any]]:
                 "is_external": is_external_device,
                 "failed": device_id is not None and device_id in failed_devices,
                 "sw_version_raw": registry_version_raw,
+                "pending_force_install": device_id is not None and device_id in pending_force_installs,
             })
 
         elif state is None or state.state == "unavailable":
@@ -2058,6 +2150,7 @@ def _get_esphome_update_entities(hass: HomeAssistant) -> list[dict[str, Any]]:
                 "is_external": is_external_device,
                 "failed": device_id is not None and device_id in failed_devices,
                 "sw_version_raw": registry_version_raw,
+                "pending_force_install": device_id is not None and device_id in pending_force_installs,
             })
 
         else:
@@ -2113,6 +2206,7 @@ def _get_esphome_update_entities(hass: HomeAssistant) -> list[dict[str, Any]]:
                 "is_external": is_external_device,
                 "failed": device_id is not None and device_id in failed_devices,
                 "sw_version_raw": registry_version_raw,
+                "pending_force_install": device_id is not None and device_id in pending_force_installs,
             })
             
     # ── Process ESPHome devices WITHOUT update entity ──────────────────
@@ -2242,6 +2336,7 @@ def _get_esphome_update_entities(hass: HomeAssistant) -> list[dict[str, Any]]:
             "is_external": is_external_device,
             "failed": device.id in failed_devices,
             "sw_version_raw": device.sw_version,
+            "pending_force_install": device.id in pending_force_installs,
         })
 
     # ── Cleanup: Remove remembered devices that no longer exist in HA ──────
@@ -2299,6 +2394,184 @@ def _get_esphome_update_entities(hass: HomeAssistant) -> list[dict[str, Any]]:
     if pending_yaml_checks:
         hass.async_create_task(_refresh_local_yaml_cache(hass, pending_yaml_checks))
     return devices
+
+async def _check_pending_force_installs(hass: HomeAssistant) -> None:
+    """Check pending force installs and trigger them when ready (debounced 15s)."""
+    settings = hass.data[DOMAIN].get("settings", {})
+    pending: dict = settings.get("pending_force_installs", {})
+    if not pending:
+        return
+
+    queue: UpdateQueue | None = hass.data[DOMAIN].get("queue")
+    if queue is None:
+        return
+
+    if queue.is_running:
+        if hass.data[DOMAIN].get("pending_force_install_retry"):
+            return
+        hass.data[DOMAIN]["pending_force_install_retry"] = True
+
+        async def _retry():
+            await asyncio.sleep(60)
+            hass.data[DOMAIN].pop("pending_force_install_retry", None)
+            await _check_pending_force_installs(hass)
+
+        hass.async_create_task(_retry())
+        return
+
+    # Are any devices ready?
+    if not _has_ready_pending_devices(hass, pending):
+        return
+
+    # Debounce 15s so multiple devices coming online get batched together
+    if hass.data[DOMAIN].get("pending_force_install_timer"):
+        return
+    hass.data[DOMAIN]["pending_force_install_timer"] = True
+
+    async def _flush():
+        await asyncio.sleep(15)
+        hass.data[DOMAIN].pop("pending_force_install_timer", None)
+        await _execute_pending_force_installs(hass)
+
+    hass.async_create_task(_flush())
+
+
+def _has_ready_pending_devices(hass: HomeAssistant, pending: dict) -> bool:
+    """Return True if at least one pending device is currently ready (online + dashboard ok)."""
+    ent_reg = er.async_get(hass)
+    dev_reg = dr.async_get(hass)
+    external_coordinator = hass.data[DOMAIN].get("external_dashboard")
+    external_available = external_coordinator is not None and external_coordinator.available
+
+    for device_id in list(pending.keys()):
+        device = dev_reg.async_get(device_id)
+        if not device:
+            continue
+        if _is_device_online(hass, ent_reg, device_id) is not True:
+            continue
+        # External devices need both HA and dashboard online
+        if external_coordinator:
+            mac_suffix = _get_mac_suffix(device)
+            ext_dev = _match_device_to_external_dashboard(
+                hass,
+                device.name_by_user or device.name or "",
+                original_name=device.name,
+                mac_suffix=mac_suffix,
+            )
+            if ext_dev and not external_available:
+                continue
+        return True
+    return False
+
+
+async def _execute_pending_force_installs(hass: HomeAssistant) -> None:
+    """Execute pending force installs for devices that are ready."""
+    settings = hass.data[DOMAIN].get("settings", {})
+    pending: dict = settings.get("pending_force_installs", {})
+    if not pending:
+        return
+
+    queue: UpdateQueue = hass.data[DOMAIN].get("queue")
+    if queue is None:
+        return
+
+    if queue.is_running:
+        async def _retry():
+            await asyncio.sleep(60)
+            await _check_pending_force_installs(hass)
+        hass.async_create_task(_retry())
+        return
+
+    ent_reg = er.async_get(hass)
+    dev_reg = dr.async_get(hass)
+    external_coordinator = hass.data[DOMAIN].get("external_dashboard")
+    external_available = external_coordinator is not None and external_coordinator.available
+
+    ready_devices = []
+    processed_ids = []
+    pending_changed = False
+
+    for device_id in list(pending.keys()):
+        device = dev_reg.async_get(device_id)
+        if not device:
+            del pending[device_id]
+            pending_changed = True
+            continue
+
+        if _is_device_online(hass, ent_reg, device_id) is not True:
+            continue
+
+        if external_coordinator:
+            mac_suffix = _get_mac_suffix(device)
+            ext_dev = _match_device_to_external_dashboard(
+                hass,
+                device.name_by_user or device.name or "",
+                original_name=device.name,
+                mac_suffix=mac_suffix,
+            )
+            if ext_dev and not external_available:
+                continue
+
+        name = device.name_by_user or device.name or device_id
+        ready_devices.append({
+            "entity_id": f"force:{_normalize_device_name(device.name or name)}",
+            "device_id": device_id,
+            "name": name,
+            "from_version": device.sw_version,
+            "to_version": device.sw_version,
+        })
+        processed_ids.append(device_id)
+
+    if not ready_devices:
+        if pending_changed:
+            settings["pending_force_installs"] = pending
+            hass.data[DOMAIN]["settings"] = settings
+            store: Store = hass.data[DOMAIN].get("store")
+            if store:
+                hass.async_create_task(store.async_save(settings))
+        return
+
+    # Remove ready devices from pending list
+    for did in processed_ids:
+        pending.pop(did, None)
+    settings["pending_force_installs"] = pending
+    hass.data[DOMAIN]["settings"] = settings
+    store: Store = hass.data[DOMAIN].get("store")
+    if store:
+        await store.async_save(settings)
+
+    hass.bus.async_fire("esphome_update_manager_devices_updated")
+
+    stop_addon_slug = None
+    if settings.get("stop_addon_during_update", True):
+        addon_info = await async_get_addon_info(hass, VSCODE_ADDON_SLUG)
+        if addon_info and addon_info.get("state") == "started":
+            stop_addon_slug = VSCODE_ADDON_SLUG
+
+    _LOGGER.info(
+        "Starting pending force install for %d device(s): %s",
+        len(ready_devices),
+        [d["name"] for d in ready_devices],
+    )
+
+    try:
+        queue.start(
+            entity_ids=[d["entity_id"] for d in ready_devices],
+            force_install_devices=ready_devices,
+            stop_addon_slug=stop_addon_slug,
+        )
+    except RuntimeError as err:
+        _LOGGER.warning("Failed to start pending force install, restoring to pending: %s", err)
+        for d in ready_devices:
+            pending[d["device_id"]] = {
+                "name": d["name"],
+                "queued_at": datetime.now().isoformat(),
+            }
+        settings["pending_force_installs"] = pending
+        hass.data[DOMAIN]["settings"] = settings
+        if store:
+            await store.async_save(settings)
+        hass.bus.async_fire("esphome_update_manager_devices_updated")
 
 # ── WebSocket Commands ────────────────────────────────────────────
 
@@ -2667,3 +2940,66 @@ async def ws_subscribe_devices_updated(hass, connection, msg):
     unsub = hass.bus.async_listen("esphome_update_manager_devices_updated", handle_devices_updated)
     connection.subscriptions[msg["id"]] = unsub
     connection.send_result(msg["id"])
+
+@websocket_api.websocket_command(
+    {
+        "type": "esphome_update_manager/add_pending_force_install",
+        "device_ids": vol.All(vol.Coerce(list), [str]),
+    }
+)
+@websocket_api.async_response
+async def ws_add_pending_force_install(hass, connection, msg):
+    """Add devices to the pending force install list."""
+    settings = hass.data[DOMAIN].get("settings", {})
+    pending: dict = settings.get("pending_force_installs", {})
+    dev_reg = dr.async_get(hass)
+
+    added = 0
+    for device_id in msg["device_ids"]:
+        device = dev_reg.async_get(device_id)
+        if not device:
+            continue
+        pending[device_id] = {
+            "name": device.name_by_user or device.name or device_id,
+            "queued_at": datetime.now().isoformat(),
+        }
+        added += 1
+
+    settings["pending_force_installs"] = pending
+    hass.data[DOMAIN]["settings"] = settings
+    store: Store = hass.data[DOMAIN].get("store")
+    if store:
+        await store.async_save(settings)
+
+    hass.bus.async_fire("esphome_update_manager_devices_updated")
+    # Some may already be online → check immediately
+    hass.async_create_task(_check_pending_force_installs(hass))
+
+    connection.send_result(msg["id"], {"added": added})
+
+
+@websocket_api.websocket_command(
+    {
+        "type": "esphome_update_manager/remove_pending_force_install",
+        "device_id": str,
+    }
+)
+@websocket_api.async_response
+async def ws_remove_pending_force_install(hass, connection, msg):
+    """Remove a device from the pending force install list."""
+    settings = hass.data[DOMAIN].get("settings", {})
+    pending: dict = settings.get("pending_force_installs", {})
+
+    removed = pending.pop(msg["device_id"], None) is not None
+
+    if removed:
+        settings["pending_force_installs"] = pending
+        hass.data[DOMAIN]["settings"] = settings
+        store: Store = hass.data[DOMAIN].get("store")
+        if store:
+            await store.async_save(settings)
+        hass.bus.async_fire("esphome_update_manager_devices_updated")
+
+    connection.send_result(msg["id"], {"removed": removed})
+
+# EOF
