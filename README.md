@@ -23,13 +23,15 @@ A custom Home Assistant integration that provides a dedicated panel for managing
   - [Batch updates](#batch-updates)
   - [Force Install](#force-install)
     - [Via frontend](#via-frontend)
-    - [Via service](#via-service-force_install)
+    - [Pending force install for offline devices](#pending-force-install-for-offline-devices)
+    - [Via service](#via-service-esphome-yaml-force-install)
     - [Project version auto-check](#project-version-auto-check)
   - [Auto-update](#auto-update)
   - [VS Code Server add-on](#vs-code-server-add-on)
   - [Results](#results)
   - [Update log](#update-log)
   - [Failure notifications](#failure-notifications)
+- [Deep sleep devices](#deep-sleep-devices)
 - [Error handling](#error-handling)
   - [Failed update](#failed-update)
 - [Troubleshooting](#troubleshooting)
@@ -45,6 +47,7 @@ A custom Home Assistant integration that provides a dedicated panel for managing
 - **Batch updates** — Select multiple devices and update them sequentially with a single click
 - **Individual updates** — Update a single device directly from the panel
 - **Force Install** — Recompile and upload firmware via the ESPHome dashboard, even when no update is available. Also used for project version updates
+- **Pending Force Install for offline devices** — Queue offline (deep sleep) devices for force install; they are automatically installed as soon as they come online
 - **Project version auto-check** — Automatically detects and installs project version updates when a device comes online, HA restarts, or the external dashboard comes online
 - **Auto-update** — Automatically start updates when new firmware becomes available
 - **Enable firmware entities** — Disabled firmware update entities can be enabled directly from the panel
@@ -206,6 +209,7 @@ The panel shows all ESPHome devices with:
 | **Enabling…** (orange + spinner) | Entity is being enabled, waiting for HA to pick it up |
 | **Updating…** (blue + spinner) | Update is in progress |
 | **Installing…** (blue + spinner) | Force install is in progress |
+| **Pending** (grey) | Device is queued for force install — will start automatically when device comes online |
 | **Offline** (grey) | Device is not reachable |
 | **Unavailable** (light blue) | Firmware entity is unavailable (or external dashboard offline) |
 
@@ -224,21 +228,43 @@ Force Install recompiles the firmware via the ESPHome dashboard and uploads it v
 - You want to push a configuration change that does not change the firmware version
 - A device's project version in the YAML is higher than what is installed on the device
 - You want to force a clean reinstall of the current firmware
-- You want to update multiple devices in one batch — Force Install compiles and uploads all selected devices sequentially, without needing a firmware version bump. This is the most powerful feature of Force Install: push any change to any number of devices in one single operation.
+- You want to update multiple devices in one batch — Force Install compiles and uploads all selected devices sequentially, without needing a firmware version bump.
+- You want to install a modified yaml to an offline device when it comes online
 
 #### Via frontend
 
 1. Click **Force Install** in the toolbar
-2. The panel switches to Force Install mode — all online devices become selectable
+2. The panel switches to Force Install mode — **all** devices become selectable, including offline and unavailable ones
 3. Select one or more devices using the checkboxes (or click **Select all checkbox**)
 4. Click **▶ Force Install (n)**
-5. The integration compiles the firmware and uploads it via OTA for each selected device sequentially
-6. Progress and results are shown in real-time, just like a regular update
-7. Click **✕ Cancel** to exit Force Install mode without starting
+5. **Online devices** are recompiled and uploaded immediately, sequentially
+6. **Offline devices** are added to the **pending** list and will be force installed automatically as soon as they come online (see [Pending force install for offline devices](#pending-force-install-for-offline-devices))
+7. Progress and results are shown in real-time, just like a regular update
+8. Click **✕ Cancel** to exit Force Install mode without starting
 
 > **Note:** Force Install always recompiles the firmware, even if nothing has changed.
 
-#### Via service: `ESPHome Yaml Force Install`
+#### Pending force install for offline devices
+
+Devices that are offline (e.g., deep sleep devices) when you trigger a Force Install are not skipped — they are added to a persistent **pending list**. The integration watches for these devices to come online and automatically starts the force install at that moment.
+
+**How it works:**
+
+1. Select one or more offline devices in Force Install mode (or pass them to the `esphome_update_manager.force_install` service) and confirm (Click **▶ Force Install (n)**)
+2. Each offline device is shown with the **Pending** label in the panel — its checkbox is checked and clicking it again removes the device from the pending list
+3. When a pending device comes online (status sensor goes `on` or ESPHome native API reconnects), the integration waits a short debounce window of ~15 seconds so multiple devices waking up at the same time can be batched
+4. Once ready, the force install starts automatically for all online pending devices in a single batch
+5. After the force install completes, the device is removed from the pending list — regardless of success or failure
+
+**Properties:**
+- The pending list is persisted across Home Assistant restarts
+- A pending device that is removed from Home Assistant is automatically cleaned up
+- If a normal update queue is already running when a pending device comes online, the integration retries every 60 seconds until the queue is free
+- Pending state is independent from auto-update — pending devices are always force installed, even when auto-update is disabled
+
+> **Tip:** Combine pending force install with the [Deep sleep devices](#deep-sleep-devices) automation to fully automate firmware updates for battery-powered devices.
+
+#### Via service: ESPHome Yaml Force Install
 
 Force Install can also be triggered via a Home Assistant service call, useful for automations:
 
@@ -247,6 +273,11 @@ Force Install can also be triggered via a Home Assistant service call, useful fo
 | Parameter | Required | Description |
 |-----------|----------|-------------|
 | `device_id` | Yes | One or more Home Assistant device IDs to force install. Can be a single string or a list. |
+
+**Behavior:**
+- **Online devices** are force installed immediately
+- **Offline devices** are added to the [pending list](#pending-force-install-for-offline-devices) and will be installed automatically when they come online
+- If the queue is already running, all selected devices are added to the pending list and will be installed when the queue is free
 
 > **Note:** The force_install service respects the "Stop VS Code Server" setting — if enabled, the VS Code Server add-on will be stopped before the update and restarted afterwards.
 
@@ -259,7 +290,7 @@ actions:
       device_id: "abc123def456"
 ```
 
-**Example automation — force install multiple devices:**
+**Example automation — force install multiple devices (mix of online + offline allowed):**
 
 ```yaml
 actions:
@@ -410,6 +441,112 @@ Clicking the link opens the panel and automatically displays the latest update l
 
 <img width="500" height="389" alt="log" src="https://github.com/user-attachments/assets/c3f5c8c2-d1f0-4ed4-8224-71bf30eaf17f" />
 
+## Deep sleep devices
+
+The pending force install feature is especially useful for **battery-powered deep sleep devices** that are offline most of the time and only briefly online to report data. By combining pending force install with a small Home Assistant automation, firmware updates can be fully automated for these devices: queue them once, and the next time they wake up they will be flashed and put back to sleep automatically.
+
+### Requirements per device
+
+Each deep sleep device must expose:
+
+1. **A status binary sensor** (used by both the integration and the automation to detect when the device is online):
+
+   ```yaml
+   binary_sensor:
+     - platform: status
+       name: "Status"
+   ```
+
+2. **A deep sleep button** the automation can press. The entity_id must contain `deep_sleep`, `deepsleep`, or have `sleep` in its friendly name. The deep sleep block must **not** define a `run_duration`, so the device stays awake until the button is pressed:
+
+   ```yaml
+   deep_sleep:
+     id: deep_sleep_control
+     sleep_duration: 60min
+
+   button:
+     - platform: template
+       name: "Enter Deep Sleep"
+       icon: mdi:sleep
+       on_press:
+         - deep_sleep.enter:
+             id: deep_sleep_control
+   ```
+
+> **Note:** Without a status binary sensor, the automation cannot reliably detect when the device is back online after the OTA reboot, and the deep sleep button will not be pressed.
+
+### Workflow
+
+1. In the panel, switch to **Force Install** mode and select one or more offline deep sleep devices, then confirm. They appear with the **Pending** label.
+2. The next time a pending device wakes up, the integration starts the force install automatically. Multiple devices waking up within ~15 seconds are batched into a single run.
+3. After the install finishes, the automation below presses the deep sleep button so the device returns to sleep until the next wake cycle.
+
+### Automation
+
+This single automation handles **all** deep sleep devices simultaneously. It only triggers after a force install — regular updates and devices that wake up without a pending force install are not affected.
+
+```yaml
+alias: Deep sleep after force install
+description: >
+  Presses the deep sleep button of every device that just completed a force
+  install (successful or not). Works automatically for multiple devices at once.
+triggers:
+  - event_type: esphome_update_manager_finished
+    trigger: event
+actions:
+  - variables:
+      force_devices: |
+        {{ trigger.event.data.results
+           | selectattr('is_force_install', 'eq', true)
+           | selectattr('device_id', 'defined')
+           | list }}
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: "{{ force_devices | length > 0 }}"
+        sequence:
+          - repeat:
+              for_each: "{{ force_devices }}"
+              sequence:
+                - wait_template: >
+                    {% set ns = namespace(online=false) %}
+                    {% for e in states.binary_sensor
+                       if e.entity_id.endswith('_status')
+                       and device_id(e.entity_id) == repeat.item.device_id %}
+                      {% if e.state == 'on' %}{% set ns.online = true %}{% endif %}
+                    {% endfor %}
+                    {{ ns.online }}
+                  timeout: "00:03:00"
+                  continue_on_timeout: true
+                - delay: "00:00:03"
+                - variables:
+                    deep_sleep_btn: >
+                      {% set ns = namespace(found=none) %}
+                      {% for e in states.button
+                         if device_id(e.entity_id) == repeat.item.device_id
+                         and ('deep_sleep' in e.entity_id
+                              or 'deepsleep' in e.entity_id
+                              or 'sleep' in (e.attributes.friendly_name | lower)) %}
+                        {% set ns.found = e.entity_id %}
+                      {% endfor %}
+                      {{ ns.found }}
+                - choose:
+                    - conditions:
+                        - condition: template
+                          value_template: "{{ deep_sleep_btn != none }}"
+                      sequence:
+                        - target:
+                            entity_id: "{{ deep_sleep_btn }}"
+                          action: button.press
+mode: single
+max_exceeded: silent
+```
+
+**How it stays safe:**
+- The automation triggers on the `esphome_update_manager_finished` event and filters on `is_force_install: true`. Regular updates (auto-update, manual update via the panel, `start_updates` service) do **not** match and will not put devices to sleep.
+- Devices that wake up but are **not** in the pending list are never touched — the integration does not even fire the event in that case.
+- If a device has no matching deep sleep button, the automation does nothing for that device.
+
 ## Error handling
 
 The integration handles various failure scenarios gracefully:
@@ -502,6 +639,18 @@ The integration handles various failure scenarios gracefully:
 - Check the ESPHome dashboard logs for compile or upload errors
 - Ensure the device is online and reachable via OTA
 - Check Home Assistant logs for `esphome_update_manager` entries
+
+### Pending force install does not trigger when the device wakes up
+- Ensure the device has a `binary_sensor: status` entity (see [Recommendations](#recommendations)) — the integration relies on it to detect online transitions reliably
+- Verify the device is still in the pending list (visible as **Pending** in the panel)
+- If the regular update queue is running, pending installs are retried every 60 seconds until the queue is free
+- Check Home Assistant logs for `esphome_update_manager` entries
+
+### Deep sleep automation does not put devices back to sleep
+- Verify the device has a button entity whose entity_id contains `deep_sleep`, `deepsleep`, or whose friendly name contains `sleep`
+- Verify the device's deep sleep block in YAML does **not** set `run_duration` (otherwise the device sleeps before the button is pressed)
+- Check the automation traces (Settings → Automations → Deep sleep after force install → Traces) to see which path was taken
+- Confirm the `esphome_update_manager_finished` event contains entries with `is_force_install: true` (Developer Tools → Events → listen)
 
 ### External dashboard not connecting
 - Verify the URL is correct and accessible from Home Assistant (e.g., `http://192.168.1.100:6052`)
