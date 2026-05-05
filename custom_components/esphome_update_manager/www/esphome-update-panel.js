@@ -813,22 +813,40 @@ class ESPHomeUpdatePanel extends LitElement {
 
     const merged = this._mergedDevices();
     const selectedDevices = merged.filter(d => this.selected.has(d.entity_id));
-    const forceInstallDevices = selectedDevices
-      .filter(d => d.device_id)
-      .map(d => ({
-        entity_id: `force:${d.name}`,
-        device_id: d.device_id,
-        name: d.name,
-        from_version: d.sw_version_raw || d.current_version || null,
-        to_version: null,
-      }));
 
-    if (forceInstallDevices.length === 0) {
-      alert("No valid devices selected");
+    const onlineSelected = selectedDevices.filter(d => d.online === true && d.device_id);
+    const offlineSelected = selectedDevices.filter(d => d.online !== true && d.device_id);
+
+    // Save offline ones as pending
+    if (offlineSelected.length > 0) {
+      try {
+        await this.hass.callWS({
+          type: "esphome_update_manager/add_pending_force_install",
+          device_ids: offlineSelected.map(d => d.device_id),
+        });
+      } catch (e) {
+        console.error("Failed to add pending force install:", e);
+      }
+    }
+
+    // No online → just exit mode and refresh
+    if (onlineSelected.length === 0) {
+      this._forceInstallMode = false;
+      this.selected.clear();
+      await this._loadDevices();
+      this.requestUpdate();
       return;
     }
 
-    selectedDevices.forEach((d) => {
+    const forceInstallDevices = onlineSelected.map(d => ({
+      entity_id: `force:${d.name}`,
+      device_id: d.device_id,
+      name: d.name,
+      from_version: d.sw_version_raw || d.current_version || null,
+      to_version: null,
+    }));
+
+    onlineSelected.forEach((d) => {
       this._forceInstallingIds.set(d.entity_id, { startedAt: null, timeoutId: null, isRunning: false });
     });
     this.requestUpdate();
@@ -905,6 +923,7 @@ class ESPHomeUpdatePanel extends LitElement {
   _getDeviceButton(d) {
     const isForceInstalling = this._forceInstallingIds.has(d.entity_id);
     if (isForceInstalling) return { label: "Installing…", cls: "btn-updating", disabled: true, action: null, spinner: true };
+    if (d.pending_force_install) return { label: "Pending", cls: "btn-offline", disabled: true, action: null, spinner: false };
     const isUpdating = this._isUpdatingPending(d.entity_id) || d.in_progress;
     if (d.online === false) return { label: "Offline", cls: "btn-offline", disabled: true, action: null, spinner: false };
     if (d.enabling) return { label: "Enabling…", cls: "btn-enabling", disabled: true, action: null, spinner: true };
@@ -929,6 +948,26 @@ class ESPHomeUpdatePanel extends LitElement {
     }
   }
 
+  _handleCheckboxChange(d) {
+    if (d.pending_force_install) {
+      this._removePendingForceInstall(d.device_id);
+    } else {
+      this._toggleSelect(d.entity_id);
+    }
+  }
+
+  async _removePendingForceInstall(deviceId) {
+    if (!deviceId) return;
+    try {
+      await this.hass.callWS({
+        type: "esphome_update_manager/remove_pending_force_install",
+        device_id: deviceId,
+      });
+    } catch (e) {
+      console.error("Failed to remove pending force install:", e);
+    }
+  }
+
   _canSelect(d) {
     return (
       d.update_available &&
@@ -945,7 +984,7 @@ class ESPHomeUpdatePanel extends LitElement {
   _canForceSelect(d) {
     return (
       !d.enabling &&
-      d.online !== false &&
+      !d.pending_force_install &&
       !this._isUpdatingPending(d.entity_id) &&
       !d.in_progress &&
       d.entity_id
@@ -1549,7 +1588,10 @@ render() {
 
   _renderDevice(d) {
     const btn = this._getDeviceButton(d);
+    const isPending = !!d.pending_force_install;
     const canSelect = this._forceInstallMode ? this._canForceSelect(d) : this._canSelect(d);
+    const showCheckbox = canSelect || isPending;
+    const isChecked = isPending || this.selected.has(d.entity_id);
     const isOffline = d.online === false;
     const displayName = (this._isMixedSetup && d.is_external)
       ? `${d.name} (ext)`
@@ -1558,11 +1600,11 @@ render() {
     return html`
       <div class="device-row ${isOffline ? "offline" : ""}">
         <span class="checkbox-col">
-          ${canSelect ? html`
+          ${showCheckbox ? html`
             <input type="checkbox"
-              .checked=${this.selected.has(d.entity_id)}
+              .checked=${isChecked}
               ?disabled=${this.running}
-              @change=${() => this._toggleSelect(d.entity_id)} />
+              @change=${() => this._handleCheckboxChange(d)} />
           ` : html`
             <input type="checkbox" disabled .checked=${false} />
           `}
