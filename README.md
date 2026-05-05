@@ -276,7 +276,7 @@ Force Install can also be triggered via a Home Assistant service call, useful fo
 
 **Behavior:**
 - **Online devices** are force installed immediately
-- **Offline devices** are added to the [pending list](#pending-force-install-for-offline-devices) and will be installed automatically when they come online
+- **Offline devices** are added to the pending list and will be installed automatically when they come online
 - If the queue is already running, all selected devices are added to the pending list and will be installed when the queue is free
 
 > **Note:** The force_install service respects the "Stop VS Code Server" setting — if enabled, the VS Code Server add-on will be stopped before the update and restarted afterwards.
