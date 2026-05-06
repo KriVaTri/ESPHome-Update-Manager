@@ -1418,7 +1418,7 @@ render() {
 
       ${this.cardMode && !cfg.show_header ? "" : html`
         <div class="header-wrapper">
-          ${this.narrow ? html`
+          ${(this.narrow || this.hass?.dockedSidebar === "always_hidden") ? html`
             <div class="app-toolbar">
               <button class="sidebar-toggle" @click=${this._toggleSidebar} title="Open sidebar">
                 <svg viewBox="0 0 24 24">
