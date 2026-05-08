@@ -38,6 +38,7 @@ class ESPHomeUpdatePanel extends LitElement {
       _forceInstallMode: { type: Boolean },
       _isForceInstallRun: { type: Boolean },
       _forceInstallingIds: { type: Object },
+      _updateMode: { type: Boolean },
       cardMode: { type: Boolean },
       cardConfig: { type: Object }
     };
@@ -81,6 +82,7 @@ class ESPHomeUpdatePanel extends LitElement {
     this._forceInstallMode = false;
     this._isForceInstallRun = false;
     this._forceInstallingIds = new Map();
+    this._updateMode = false;
     this.cardMode = false;
     this.cardConfig = {};
   }
@@ -745,6 +747,7 @@ class ESPHomeUpdatePanel extends LitElement {
       });
       this.running = true;
       this._startStatusPolling();
+      this._updateMode = false;
     } catch (e) {
       ids.forEach((id) => {
         this._updatingIds.delete(id);
@@ -798,12 +801,25 @@ class ESPHomeUpdatePanel extends LitElement {
 
   _enterForceInstallMode() {
     this._forceInstallMode = true;
+    this._updateMode = false;
     this.selected.clear();
     this.requestUpdate();
   }
 
   _exitForceInstallMode() {
     this._forceInstallMode = false;
+    this.selected.clear();
+    this.requestUpdate();
+  }
+
+  _enterUpdateMode() {
+    this._updateMode = true;
+    this.selected.clear();
+    this.requestUpdate();
+  }
+
+  _exitUpdateMode() {
+    this._updateMode = false;
     this.selected.clear();
     this.requestUpdate();
   }
@@ -1213,9 +1229,21 @@ class ESPHomeUpdatePanel extends LitElement {
         width: 14px;
         height: 14px;
       }
+      .btn-batch-update,
+      .btn-force-install,
+      .btn-force-mode,
+      .btn-cancel,
+      .btn-cancel-mode { line-height: 1; }
       .btn-select-all input[type="checkbox"]:disabled { opacity: 0.6; filter: brightness(2); }
       .btn-batch-update { background: #2196f3; color: white; }
       .btn-batch-update:hover:not(:disabled) { background: #1976d2; }
+      .btn-batch-update:disabled { background: #666;}
+      .btn-batch-update.btn-update-active:disabled { background: #2196f3;}
+      .btn-batch-update { min-width: 155px; justify-content: center; }
+      .btn-icon-only {
+        padding: 6px 10px;
+        min-width: auto;
+      }
       .btn-cancel { background: #f44336; color: white; }
       .btn-cancel:hover:not(:disabled) { background: #c62828; }
       .btn-cancel:disabled { opacity: 0.7; cursor: not-allowed; }
@@ -1223,8 +1251,13 @@ class ESPHomeUpdatePanel extends LitElement {
       .btn-force-mode:hover { background: #3e9140; }
       .btn-force-install { background: #4caf50; color: white; }
       .btn-force-install:hover:not(:disabled) { background: #3e9140; }
+      .btn-force-mode:disabled { background: #666; }
+      .btn-force-install, .btn-force-mode { min-width: 130px; justify-content: center; }
       .btn-cancel-mode { background: #666; color: white; }
       .btn-cancel-mode:hover { background: #555; }
+      .btn-cancel-mode { min-width: 35px; justify-content: center; }
+      .btn-cancel-mode { font-size: 1em; }
+      .btn-cancel-mode { color: #eee; }
       .spinner {
         display: inline-block;
         width: 12px; height: 12px;
@@ -1353,6 +1386,10 @@ class ESPHomeUpdatePanel extends LitElement {
         font-size: 1em;
         padding: 8px 4px 2px;
       }
+      .content.compact .btn-batch-update { min-width: 140px; justify-content: center; }
+      .content.compact .btn-force-install,
+      .content.compact .btn-force-mode { min-width: 115px; justify-content: center; }
+      .content.compact .btn-cancel-mode { min-width: auto; padding: 4px 8px; }
       .content.compact .checkbox-col input[type="checkbox"],
       .content.compact .btn-select-all input[type="checkbox"],
       .content.compact .addon-option input[type="checkbox"] {
@@ -1398,7 +1435,7 @@ render() {
     const offlineCount = merged.filter((d) => d.online === false).length;
     const unknownCount = merged.filter((d) => d.online === null).length;
     const showAddonOption = this._addonInfo?.installed;
-    const showToolbar = selectableCount > 0 || this.running || this._forceInstallMode || forceSelectableCount > 0;
+    const showToolbar = true;
 
     const cfg = this.cardConfig || {};
     const hideResults = cfg.hide_results || false;
@@ -1508,15 +1545,20 @@ render() {
                   ?disabled=${forceSelectableCount === 0}
                   @change=${this._selectAll}>
               </label>
+              <button class="btn-batch-update" disabled>
+                Firmware Update
+              </button>
               <button class="btn-force-install"
                 ?disabled=${this.selected.size === 0}
                 @click=${this._startForceInstall}>
                 ▶ Force Install (${this.selected.size})
               </button>
-              <button class="btn-cancel-mode" @click=${this._exitForceInstallMode}>
-                ✕ Cancel
+              <button class="btn-cancel-mode btn-icon-only"
+                @click=${this._exitForceInstallMode}
+                title="Cancel force install mode">
+                ✕
               </button>
-            ` : html`
+            ` : this._updateMode ? html`
               <label class="btn-select-all"
                 style="${selectableCount === 0 ? 'pointer-events: none;' : ''}">
                 <input type="checkbox"
@@ -1525,12 +1567,29 @@ render() {
                   ?disabled=${selectableCount === 0}
                   @change=${this._selectAll}>
               </label>
-              <button class="btn-batch-update"
+              <button class="btn-batch-update btn-update-active"
                 ?disabled=${this.selected.size === 0}
                 @click=${() => this._startBatchUpdate().catch(e => {
                   this._addLocalResult("Batch update", "failed", "Batch update failed: " + String(e?.message || e));
                 })}>
-                ▶ Update selected (${this.selected.size})
+                ▶ Firmware Update (${this.selected.size})
+              </button>
+              <button class="btn-force-mode" disabled>
+                Force Install
+              </button>
+              <button class="btn-cancel-mode btn-icon-only"
+                @click=${this._exitUpdateMode}
+                title="Cancel update mode">
+                ✕
+              </button>
+            ` : html`
+              <label class="btn-select-all" style="pointer-events: none;">
+                <input type="checkbox" disabled .checked=${false}>
+              </label>
+              <button class="btn-batch-update"
+                ?disabled=${selectableCount === 0}
+                @click=${this._enterUpdateMode}>
+                Firmware Update
               </button>
               <button class="btn-force-mode" @click=${this._enterForceInstallMode}>
                 Force Install
@@ -1589,8 +1648,9 @@ render() {
   _renderDevice(d) {
     const btn = this._getDeviceButton(d);
     const isPending = !!d.pending_force_install;
+    const inMode = this._forceInstallMode || this._updateMode;
     const canSelect = this._forceInstallMode ? this._canForceSelect(d) : this._canSelect(d);
-    const showCheckbox = canSelect || isPending;
+    const showCheckbox = (inMode && canSelect) || isPending;
     const isChecked = isPending || this.selected.has(d.entity_id);
     const isOffline = d.online === false;
     const displayName = (this._isMixedSetup && d.is_external)
