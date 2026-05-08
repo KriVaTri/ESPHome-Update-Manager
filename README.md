@@ -18,6 +18,7 @@ A custom Home Assistant integration that provides a dedicated panel for managing
   - [External Dashboard Setup](#external-dashboard-setup)
 - [Dashboard Card](#dashboard-card)
 - [Usage](#usage)
+  - [Toolbar](#toolbar)
   - [Device list](#device-list)
   - [Device button](#device-button)
   - [Batch updates](#batch-updates)
@@ -186,6 +187,22 @@ align: center
 
 ## Usage
 
+### Toolbar
+
+The toolbar above the device list contains the main action buttons:
+
+| Button | State | Description |
+|--------|-------|-------------|
+| **Firmware Update** (blue) | Updates available | Click to enter update mode and select devices to update |
+| **No Updates** (grey) | No updates available | Disabled — no devices have updates pending |
+| **▶ Update selected (n)** (blue) | Update mode active | Starts the update queue for the selected devices |
+| **Force Install** (green) | Always available | Click to enter Force Install mode and select devices to recompile |
+| **▶ Force Install (n)** (green) | Force Install mode active | Starts force install for the selected devices |
+| ❌ | Mode active | Exits the current mode without starting any action |
+| **⏹ Cancel** (red) | Updates running | Cancels the running update queue |
+
+Only one mode (update or force install) can be active at a time. The opposite button is disabled while a mode is active.
+
 ### Device list
 
 The panel shows all ESPHome devices with:
@@ -233,16 +250,17 @@ Force Install recompiles the firmware via the ESPHome dashboard and uploads it v
 
 #### Via frontend
 
-1. Click **Force Install** in the toolbar
-2. The panel switches to Force Install mode — **all** devices become selectable, including offline and unavailable ones
-3. Select one or more devices using the checkboxes (or click **Select all checkbox**)
-4. Click **▶ Force Install (n)**
-5. **Online devices** are recompiled and uploaded immediately, sequentially
-6. **Offline devices** are added to the **pending** list and will be force installed automatically as soon as they come online (see [Pending force install for offline devices](#pending-force-install-for-offline-devices))
-7. Progress and results are shown in real-time, just like a regular update
-8. Click **✕ Cancel** to exit Force Install mode without starting
+1. Click **Force Install** in the toolbar — the panel switches to Force Install mode and **all** devices become selectable, including offline and unavailable ones
+2. Select one or more devices using the checkboxes (or click the **Select all** checkbox in the toolbar)
+3. Click **▶ Force Install (n)** to start
+4. **Online devices** are recompiled and uploaded immediately, sequentially
+5. **Offline devices** are added to the **pending** list and will be force installed automatically as soon as they come online (see [Pending force install for offline devices](#pending-force-install-for-offline-devices))
+6. Progress and results are shown in real-time, just like a regular update
+7. Click **✕** to exit Force Install mode without starting
 
-> **Note:** Force Install always recompiles the firmware, even if nothing has changed.
+> **Note:** While in Force Install mode, the **Firmware Update** button is disabled (and vice versa) — you can only be in one mode at a time.
+> 
+> Force Install always recompiles the firmware, even if nothing has changed.
 
 #### Pending force install for offline devices
 
