@@ -1677,7 +1677,7 @@ def _format_display_version(sw_version_raw: str | None, esphome_version: str | N
         return esphome_version
     match = re.match(r'^([\d.]+)\s*\(ESPHome', str(sw_version_raw))
     if match:
-        return f"{esphome_version}({match.group(1)})"
+        return f"{esphome_version} ({match.group(1)})"
     return esphome_version
 
 
