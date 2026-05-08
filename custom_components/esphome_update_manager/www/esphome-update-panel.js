@@ -1388,7 +1388,7 @@ class ESPHomeUpdatePanel extends LitElement {
       .content.compact .btn-batch-update { min-width: 140px; justify-content: center; }
       .content.compact .btn-force-install,
       .content.compact .btn-force-mode { min-width: 115px; justify-content: center; }
-      .content.compact .btn-cancel-mode { min-width: auto; padding: 4px 8px; }
+      .content.compact .btn-cancel-mode { min-width: 35px; padding: 4px 8px; }
       .content.compact .checkbox-col input[type="checkbox"],
       .content.compact .btn-select-all input[type="checkbox"],
       .content.compact .addon-option input[type="checkbox"] {
