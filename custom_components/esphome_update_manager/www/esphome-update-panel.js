@@ -1396,6 +1396,10 @@ class ESPHomeUpdatePanel extends LitElement {
         width: 13.5px;
         height: 13.5px;
       }
+      @media (pointer: coarse) {
+        button.btn-cancel-mode { font-size: 1.3em; font-weight: 700; }
+        .content.compact button.btn-cancel-mode { font-size: 1.2em; font-weight: 700; }
+      }
       @media (max-width: 600px) and (pointer: coarse) {
         .checkbox-col input[type="checkbox"],
         .addon-option input[type="checkbox"] {
@@ -1413,6 +1417,9 @@ class ESPHomeUpdatePanel extends LitElement {
         .content.compact .device-row { padding-left: 9px; padding-right: 10px; }
         .content.compact .toolbar { padding-left: 10px; }
         .content.compact .addon-option { padding-left: 14px; padding-right: 14px; }
+        .content.compact .btn-cancel-mode { font-size: 1em; }
+        button.btn-cancel-mode { font-size: 1.3em; font-weight: 700; }
+        .content.compact button.btn-cancel-mode { font-size: 1.2em; font-weight: 700; }
         .content { padding-left: 0; padding-right: 0; }
         .device-row { padding-left: 9px; padding-right: 10px; }
         .toolbar { margin-left: 0; padding-left: 10px; }
