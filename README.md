@@ -198,7 +198,7 @@ The toolbar above the device list contains the main action buttons:
 | **▶ Update selected (n)** (blue) | Update mode active | Starts the update queue for the selected devices |
 | **Force Install** (green) | Always available | Click to enter Force Install mode and select devices to recompile |
 | **▶ Force Install (n)** (green) | Force Install mode active | Starts force install for the selected devices |
-| ❌ | Mode active | Exits the current mode without starting any action |
+| **✕** | Mode active | Exits the current mode without starting any action |
 | **⏹ Cancel** (red) | Updates running | Cancels the running update queue |
 
 Only one mode (update or force install) can be active at a time. The opposite button is disabled while a mode is active.
