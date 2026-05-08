@@ -1256,7 +1256,7 @@ class ESPHomeUpdatePanel extends LitElement {
       .btn-cancel-mode { background: #666; color: white; }
       .btn-cancel-mode:hover { background: #555; }
       .btn-cancel-mode { min-width: 35px; justify-content: center; }
-      .btn-cancel-mode { font-size: 1em; }
+      .btn-cancel-mode { font-size: 0.9em; font-weight: 600; }
       .btn-cancel-mode { color: #eee; }
       .spinner {
         display: inline-block;
