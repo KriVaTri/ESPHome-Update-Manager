@@ -1665,6 +1665,22 @@ def _extract_esphome_version(version: str | None) -> str | None:
     return None
 
 
+def _format_display_version(sw_version_raw: str | None, esphome_version: str | None) -> str | None:
+    """Format version for the frontend panel.
+
+    If sw_version_raw has the project format 'X.Y.Z (ESPHome YYYY.M.P)',
+    return 'YYYY.M.P(X.Y.Z)'. Otherwise just the ESPHome version.
+    """
+    if not esphome_version:
+        return esphome_version
+    if not sw_version_raw:
+        return esphome_version
+    match = re.match(r'^([\d.]+)\s*\(ESPHome', str(sw_version_raw))
+    if match:
+        return f"{esphome_version}({match.group(1)})"
+    return esphome_version
+
+
 def _get_local_esphome_builder_version(hass: HomeAssistant) -> str | None:
     """Get the ESPHome version from the local HA add-on."""
     state = hass.states.get(BUILDER_ENTITY_ID)
@@ -2089,8 +2105,8 @@ def _get_esphome_update_entities(hass: HomeAssistant) -> list[dict[str, Any]]:
                 "entity_id": entity_id,
                 "device_id": device_id,
                 "name": name,
-                "current_version": installed,
-                "latest_version": builder_version if update_available else None,
+                "current_version": _format_display_version(registry_version_raw, installed),
+                "latest_version": _format_display_version(registry_version_raw, builder_version) if update_available else None,
                 "update_available": update_available and not is_dashboard_unavailable,
                 "in_progress": False,
                 "firmware_disabled": True,
@@ -2138,8 +2154,8 @@ def _get_esphome_update_entities(hass: HomeAssistant) -> list[dict[str, Any]]:
                 "entity_id": entity_id,
                 "device_id": device_id,
                 "name": name,
-                "current_version": installed,
-                "latest_version": builder_version if update_available else None,
+                "current_version": _format_display_version(registry_version_raw, installed),
+                "latest_version": _format_display_version(registry_version_raw, builder_version) if update_available else None,
                 "update_available": update_available and not is_dashboard_unavailable,
                 "in_progress": False,
                 "firmware_disabled": False,
@@ -2194,8 +2210,12 @@ def _get_esphome_update_entities(hass: HomeAssistant) -> list[dict[str, Any]]:
                 "entity_id": entity_id,
                 "device_id": device_id,
                 "name": name,
-                "current_version": installed,
-                "latest_version": latest if (ha_says_update and actually_newer) or is_skipped else None,
+                "current_version": _format_display_version(registry_version_raw, installed),
+                "latest_version": (
+                    _format_display_version(registry_version_raw, latest)
+                    if (ha_says_update and actually_newer) or is_skipped
+                    else None
+                ),
                 "update_available": ha_says_update and actually_newer and not is_dashboard_unavailable,
                 "in_progress": state.attributes.get("in_progress", False),
                 "firmware_disabled": False,
@@ -2324,8 +2344,8 @@ def _get_esphome_update_entities(hass: HomeAssistant) -> list[dict[str, Any]]:
             "entity_id": device_entity_id,
             "device_id": device.id,
             "name": name,
-            "current_version": installed,
-            "latest_version": builder_version if update_available else None,
+            "current_version": _format_display_version(device.sw_version, installed),
+            "latest_version": _format_display_version(device.sw_version, builder_version) if update_available else None,
             "update_available": update_available,
             "in_progress": False,
             "firmware_disabled": False,
