@@ -147,6 +147,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data[DOMAIN]["settings"] = stored_settings
     hass.data[DOMAIN]["unsubscribe_listeners"] = []
     hass.data[DOMAIN]["failed_devices"] = stored_settings.get("failed_devices", {})
+    hass.data[DOMAIN]["excluded_devices"] = stored_settings.get("excluded_devices", {})
 
     # Cleanup remembered external devices that no longer exist in HA
     async def _cleanup_remembered_devices(_hass: HomeAssistant) -> None:
@@ -235,6 +236,24 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     hass.async_create_task(store.async_save(settings))
                 _LOGGER.debug("Removed %d stale pending force installs after device removal", len(to_remove_fi))
 
+        # Cleanup excluded_devices that no longer exist in HA
+        excluded_dev: dict = settings.get("excluded_devices", {})
+        if excluded_dev:
+            to_remove_exc = [
+                did for did in excluded_dev
+                if dev_reg.async_get(did) is None
+            ]
+            if to_remove_exc:
+                for did in to_remove_exc:
+                    del excluded_dev[did]
+                settings["excluded_devices"] = excluded_dev
+                hass.data[DOMAIN]["settings"] = settings
+                hass.data[DOMAIN]["excluded_devices"] = excluded_dev
+                store: Store = hass.data[DOMAIN].get("store")
+                if store:
+                    hass.async_create_task(store.async_save(settings))
+                _LOGGER.debug("Removed %d stale excluded devices after device removal", len(to_remove_exc))
+
     unsub_device_registry = hass.bus.async_listen(
         dr.EVENT_DEVICE_REGISTRY_UPDATED,
         _handle_device_registry_updated,
@@ -269,6 +288,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     websocket_api.async_register_command(hass, ws_subscribe_devices_updated)
     websocket_api.async_register_command(hass, ws_add_pending_force_install)
     websocket_api.async_register_command(hass, ws_remove_pending_force_install)
+    websocket_api.async_register_command(hass, ws_set_excluded_devices)
 
     # Register static paths to serve frontend files directly from the
     # custom_components folder. This avoids any dependency on <config>/www/.
@@ -862,6 +882,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data[DOMAIN].pop("external_dashboard", None)
     hass.data[DOMAIN].pop("local_dashboard", None)
     hass.data[DOMAIN].pop("failed_devices", None)
+    hass.data[DOMAIN].pop("excluded_devices", None)
     hass.data[DOMAIN].pop("pending_project_installs", None)
     hass.data[DOMAIN].pop("pending_project_install_timer", None)
     hass.data[DOMAIN].pop("pending_force_install_timer", None)
@@ -1098,6 +1119,12 @@ async def _check_project_version_update(hass: HomeAssistant, entity_id: str) -> 
 
     display_name = device.name_by_user or original_name
 
+    # Skip excluded devices
+    excluded_devices = hass.data[DOMAIN].get("excluded_devices", {})
+    if entity.device_id in excluded_devices:
+        _LOGGER.debug("%s: device is excluded, skipping project version check", display_name)
+        return
+
     # Skip if device was recently successfully updated
     queue = hass.data[DOMAIN].get("queue")
     if queue:
@@ -1312,8 +1339,9 @@ async def _check_and_start_auto_update(hass: HomeAssistant) -> None:
     if queue.is_running:
         return
 
-    # Get failed devices (permanent until manual success)
+    # Get failed and excluded devices (permanent until manual success)
     failed_devices = hass.data[DOMAIN].get("failed_devices", {})
+    excluded_devices = hass.data[DOMAIN].get("excluded_devices", {})
 
     # Get all devices with available updates
     devices = _get_esphome_update_entities(hass)
@@ -1326,7 +1354,8 @@ async def _check_and_start_auto_update(hass: HomeAssistant) -> None:
         device_id = d.get("device_id")
         if device_id and device_id in failed_devices:
             continue
-
+        if device_id and device_id in excluded_devices:
+            continue
         if (
             entity_id
             and d["update_available"]
@@ -1979,6 +2008,7 @@ def _get_esphome_update_entities(hass: HomeAssistant) -> list[dict[str, Any]]:
     remembered_external_devices: dict[str, bool] = dict(settings.get("external_devices", {}))
     remembered_external_devices_changed = False
     pending_force_installs: dict = settings.get("pending_force_installs", {})
+    excluded_devices: dict = settings.get("excluded_devices", {})
     
     # Get failed devices for marking
     failed_devices = hass.data[DOMAIN].get("failed_devices", {})
@@ -2118,6 +2148,7 @@ def _get_esphome_update_entities(hass: HomeAssistant) -> list[dict[str, Any]]:
                 "failed": device_id is not None and device_id in failed_devices,
                 "sw_version_raw": registry_version_raw,
                 "pending_force_install": device_id is not None and device_id in pending_force_installs,
+                "excluded": device_id is not None and device_id in excluded_devices,
             })
 
         elif state is None or state.state == "unavailable":
@@ -2167,6 +2198,7 @@ def _get_esphome_update_entities(hass: HomeAssistant) -> list[dict[str, Any]]:
                 "failed": device_id is not None and device_id in failed_devices,
                 "sw_version_raw": registry_version_raw,
                 "pending_force_install": device_id is not None and device_id in pending_force_installs,
+                "excluded": device_id is not None and device_id in excluded_devices,
             })
 
         else:
@@ -2227,6 +2259,7 @@ def _get_esphome_update_entities(hass: HomeAssistant) -> list[dict[str, Any]]:
                 "failed": device_id is not None and device_id in failed_devices,
                 "sw_version_raw": registry_version_raw,
                 "pending_force_install": device_id is not None and device_id in pending_force_installs,
+                "excluded": device_id is not None and device_id in excluded_devices,
             })
             
     # ── Process ESPHome devices WITHOUT update entity ──────────────────
@@ -2357,6 +2390,7 @@ def _get_esphome_update_entities(hass: HomeAssistant) -> list[dict[str, Any]]:
             "failed": device.id in failed_devices,
             "sw_version_raw": device.sw_version,
             "pending_force_install": device.id in pending_force_installs,
+            "excluded": device.id in excluded_devices,
         })
 
     # ── Cleanup: Remove remembered devices that no longer exist in HA ──────
@@ -3021,5 +3055,43 @@ async def ws_remove_pending_force_install(hass, connection, msg):
         hass.bus.async_fire("esphome_update_manager_devices_updated")
 
     connection.send_result(msg["id"], {"removed": removed})
+
+@websocket_api.websocket_command(
+    {
+        "type": "esphome_update_manager/set_excluded_devices",
+        "device_ids": vol.All(vol.Coerce(list), [str]),
+    }
+)
+@websocket_api.async_response
+async def ws_set_excluded_devices(hass, connection, msg):
+    """Replace the entire excluded devices list."""
+    settings = hass.data[DOMAIN].get("settings", {})
+    dev_reg = dr.async_get(hass)
+
+    new_excluded: dict = {}
+    for device_id in msg["device_ids"]:
+        device = dev_reg.async_get(device_id)
+        if not device:
+            continue
+        new_excluded[device_id] = {
+            "name": device.name_by_user or device.name or device_id,
+            "excluded_at": datetime.now().isoformat(),
+        }
+
+    settings["excluded_devices"] = new_excluded
+    hass.data[DOMAIN]["settings"] = settings
+    hass.data[DOMAIN]["excluded_devices"] = new_excluded
+
+    store: Store = hass.data[DOMAIN].get("store")
+    if store:
+        await store.async_save(settings)
+
+    # If auto-update is enabled, trigger a check (devices may have been un-excluded)
+    if settings.get("auto_update_enabled", False):
+        hass.async_create_task(_check_and_start_auto_update(hass))
+        
+    hass.bus.async_fire("esphome_update_manager_devices_updated")
+    _LOGGER.info("Excluded devices list updated: %d device(s)", len(new_excluded))
+    connection.send_result(msg["id"], {"count": len(new_excluded)})
 
 # EOF
