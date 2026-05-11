@@ -39,8 +39,10 @@ class ESPHomeUpdatePanel extends LitElement {
       _isForceInstallRun: { type: Boolean },
       _forceInstallingIds: { type: Object },
       _updateMode: { type: Boolean },
+      _excludeMode: { type: Boolean },
+      _excludedIds: { type: Object },
       cardMode: { type: Boolean },
-      cardConfig: { type: Object }
+      cardConfig: { type: Object },
     };
   }
 
@@ -83,6 +85,8 @@ class ESPHomeUpdatePanel extends LitElement {
     this._isForceInstallRun = false;
     this._forceInstallingIds = new Map();
     this._updateMode = false;
+    this._excludeMode = false;
+    this._excludedIds = new Set();
     this.cardMode = false;
     this.cardConfig = {};
   }
@@ -635,22 +639,19 @@ class ESPHomeUpdatePanel extends LitElement {
 
   _selectAll() {
     const merged = this._mergedDevices();
+    let selectable;
     if (this._forceInstallMode) {
-      const selectable = merged.filter((d) => this._canForceSelect(d));
-      if (selectable.length > 0 && this.selected.size === selectable.length) {
-        this.selected.clear();
-      } else {
-        this.selected.clear();
-        selectable.forEach((d) => this.selected.add(d.entity_id));
-      }
+      selectable = merged.filter((d) => this._canForceSelect(d));
+    } else if (this._excludeMode) {
+      selectable = merged.filter((d) => this._canExcludeSelect(d));
     } else {
-      const selectable = merged.filter((d) => this._canSelect(d));
-      if (selectable.length > 0 && this.selected.size === selectable.length) {
-        this.selected.clear();
-      } else {
-        this.selected.clear();
-        selectable.forEach((d) => this.selected.add(d.entity_id));
-      }
+      selectable = merged.filter((d) => this._canSelect(d));
+    }
+    if (selectable.length > 0 && this.selected.size === selectable.length) {
+      this.selected.clear();
+    } else {
+      this.selected.clear();
+      selectable.forEach((d) => this.selected.add(d.entity_id));
     }
     this.requestUpdate();
   }
@@ -719,7 +720,11 @@ class ESPHomeUpdatePanel extends LitElement {
   }
 
   async _startBatchUpdate() {
-    if (this.selected.size === 0) return;
+    if (this.selected.size === 0) {
+      this._updateMode = false;
+      this.requestUpdate();
+      return;
+    }
     const ids = [...this.selected];
     try {
       const versionInfo = {};
@@ -802,7 +807,13 @@ class ESPHomeUpdatePanel extends LitElement {
   _enterForceInstallMode() {
     this._forceInstallMode = true;
     this._updateMode = false;
-    this.selected.clear();
+    this._excludeMode = false;
+    // Pre-fill selection with currently pending devices
+    this.selected = new Set(
+      this._mergedDevices()
+        .filter(d => d.pending_force_install)
+        .map(d => d.entity_id)
+    );
     this.requestUpdate();
   }
 
@@ -814,6 +825,8 @@ class ESPHomeUpdatePanel extends LitElement {
 
   _enterUpdateMode() {
     this._updateMode = true;
+    this._forceInstallMode = false;
+    this._excludeMode = false;
     this.selected.clear();
     this.requestUpdate();
   }
@@ -824,14 +837,79 @@ class ESPHomeUpdatePanel extends LitElement {
     this.requestUpdate();
   }
 
-  async _startForceInstall() {
-    if (this.selected.size === 0) return;
+  async _enterExcludeMode() {
+    this._excludeMode = true;
+    this._updateMode = false;
+    this._forceInstallMode = false;
+    // Pre-fill selection with currently excluded devices
+    this.selected = new Set(
+      this._mergedDevices()
+        .filter(d => d.excluded)
+        .map(d => d.entity_id)
+    );
+    this.requestUpdate();
+  }
 
+  _exitExcludeMode() {
+    this._excludeMode = false;
+    this.selected.clear();
+    this.requestUpdate();
+  }
+
+  async _confirmExclude() {
+    const merged = this._mergedDevices();
+    const deviceIds = merged
+      .filter(d => this.selected.has(d.entity_id) && d.device_id)
+      .map(d => d.device_id);
+
+    try {
+      await this.hass.callWS({
+        type: "esphome_update_manager/set_excluded_devices",
+        device_ids: deviceIds,
+      });
+      this._excludeMode = false;
+      this.selected.clear();
+      await this._loadDevices();
+      this.requestUpdate();
+    } catch (e) {
+      console.error("Failed to save excluded devices:", e);
+    }
+  }
+
+  async _startForceInstall() {
     const merged = this._mergedDevices();
     const selectedDevices = merged.filter(d => this.selected.has(d.entity_id));
+    const selectedDeviceIds = new Set(selectedDevices.map(d => d.device_id).filter(Boolean));
 
-    const onlineSelected = selectedDevices.filter(d => d.online === true && d.device_id);
-    const offlineSelected = selectedDevices.filter(d => d.online !== true && d.device_id);
+    // Step 1: remove pending devices that were unchecked
+    const toRemove = merged.filter(
+      d => d.pending_force_install && d.device_id && !selectedDeviceIds.has(d.device_id)
+    );
+    for (const d of toRemove) {
+      try {
+        await this.hass.callWS({
+          type: "esphome_update_manager/remove_pending_force_install",
+          device_id: d.device_id,
+        });
+      } catch (e) {
+        console.error("Failed to remove pending force install:", e);
+      }
+    }
+
+    // Step 2: only act on newly selected (not yet pending) devices
+    const newSelections = selectedDevices.filter(d => !d.pending_force_install && d.device_id);
+
+    if (newSelections.length === 0) {
+      // Only removals (or nothing) — just exit mode
+      this._forceInstallMode = false;
+      this.selected.clear();
+      await this._loadDevices();
+      this.requestUpdate();
+      return;
+    }
+
+    const onlineSelected = newSelections.filter(d => d.online === true);
+    const offlineSelected = newSelections.filter(d => d.online !== true);
 
     // Save offline ones as pending
     if (offlineSelected.length > 0) {
@@ -845,7 +923,7 @@ class ESPHomeUpdatePanel extends LitElement {
       }
     }
 
-    // No online → just exit mode and refresh
+    // No new online → exit mode and refresh
     if (onlineSelected.length === 0) {
       this._forceInstallMode = false;
       this.selected.clear();
@@ -941,11 +1019,12 @@ class ESPHomeUpdatePanel extends LitElement {
     if (isForceInstalling) return { label: "Installing…", cls: "btn-updating", disabled: true, action: null, spinner: true };
     if (d.pending_force_install) return { label: "Pending", cls: "btn-offline", disabled: true, action: null, spinner: false };
     const isUpdating = this._isUpdatingPending(d.entity_id) || d.in_progress;
+    if (isUpdating) return { label: "Updating…", cls: "btn-updating", disabled: true, action: null, spinner: true };
     if (d.online === false) return { label: "Offline", cls: "btn-offline", disabled: true, action: null, spinner: false };
     if (d.enabling) return { label: "Enabling…", cls: "btn-enabling", disabled: true, action: null, spinner: true };
     if (d.firmware_disabled) return { label: "Enable", cls: "btn-enable", disabled: false, action: "enable", spinner: false };
     if (d.firmware_unavailable) return { label: "Unavailable", cls: "btn-unavailable", disabled: true, action: null, spinner: false };
-    if (isUpdating) return { label: "Updating…", cls: "btn-updating", disabled: true, action: null, spinner: true };
+    if (d.update_available && d.excluded) return { label: "Excluded", cls: "btn-excluded", disabled: true, action: null, spinner: false };
     if (d.update_available) return { label: "Update", cls: "btn-update", disabled: false, action: "update", spinner: false };
     if (d.skipped) return { label: "Skipped", cls: "btn-skipped", disabled: true, action: null, spinner: false };
     return { label: "Up to date", cls: "btn-uptodate", disabled: true, action: null, spinner: false };
@@ -965,11 +1044,7 @@ class ESPHomeUpdatePanel extends LitElement {
   }
 
   _handleCheckboxChange(d) {
-    if (d.pending_force_install) {
-      this._removePendingForceInstall(d.device_id);
-    } else {
-      this._toggleSelect(d.entity_id);
-    }
+    this._toggleSelect(d.entity_id);
   }
 
   async _removePendingForceInstall(deviceId) {
@@ -987,6 +1062,7 @@ class ESPHomeUpdatePanel extends LitElement {
   _canSelect(d) {
     return (
       d.update_available &&
+      !d.excluded &&
       !d.firmware_disabled &&
       !d.firmware_unavailable &&
       !d.enabling &&
@@ -1000,11 +1076,14 @@ class ESPHomeUpdatePanel extends LitElement {
   _canForceSelect(d) {
     return (
       !d.enabling &&
-      !d.pending_force_install &&
       !this._isUpdatingPending(d.entity_id) &&
       !d.in_progress &&
       d.entity_id
     );
+  }
+
+  _canExcludeSelect(d) {
+    return d.device_id && d.entity_id;
   }
 
   _showNameTooltip(e, name) {
@@ -1212,6 +1291,7 @@ class ESPHomeUpdatePanel extends LitElement {
       .btn-unavailable { background: #58a9eb; color: white; opacity: 0.8; }
       .btn-offline { background: #666; color: white; opacity: 0.8; }
       .btn-skipped { background: #9c27b0; color: white; opacity: 0.8; }
+      .btn-excluded { background: #9c27b0; color: white; opacity: 0.8; }
       .btn-select-all {
         flex: 0 0 24px;
         width: 24px;
@@ -1231,32 +1311,47 @@ class ESPHomeUpdatePanel extends LitElement {
       }
       .btn-batch-update,
       .btn-force-install,
-      .btn-force-mode,
       .btn-cancel,
       .btn-cancel-mode { line-height: 1; }
       .btn-select-all input[type="checkbox"]:disabled { opacity: 0.6; filter: brightness(2); }
-      .btn-batch-update { background: #2196f3; color: white; }
-      .btn-batch-update:hover:not(:disabled) { background: #1976d2; }
-      .btn-batch-update:disabled { background: #666;}
-      .btn-batch-update.btn-update-active:disabled { background: #2196f3;}
-      .btn-batch-update { min-width: 155px; justify-content: center; }
-      .btn-icon-only {
+
+      /* Mode toggle buttons (UPD/FRC/EXC/LOG) - small, fixed width */
+      .btn-mode-toggle {
+        min-width: 48px;
         padding: 6px 10px;
-        min-width: auto;
+        font-weight: 700;
+        letter-spacing: 0.5px;
+        justify-content: center;
       }
+      .btn-upd { background: #2196f3; color: white; }
+      .btn-upd:hover:not(:disabled) { background: #1976d2; }
+      .btn-upd:disabled { background: #666; color: #ccc; }
+      .btn-frc { background: #4caf50; color: white; }
+      .btn-frc:hover:not(:disabled) { background: #3e9140; }
+      .btn-frc:disabled { background: #666; color: #ccc; }
+      .btn-exc { background: #9c27b0; color: white; }
+      .btn-exc:hover:not(:disabled) { background: #7b1fa2; }
+      .btn-exc:disabled { background: #666; color: #ccc; }
+      .btn-log-mode { background: #00897b; color: white; }
+      .btn-log-mode:hover:not(:disabled) { background: #00695c; }
+
+      /* Active confirm buttons (full size with text + count) */
+      .btn-batch-update { background: #2196f3; color: white; min-width: 175px; justify-content: center; }
+      .btn-batch-update:hover:not(:disabled) { background: #1976d2; }
+      .btn-batch-update:disabled { background: #666; }
+      .btn-force-install { background: #4caf50; color: white; min-width: 175px; justify-content: center; }
+      .btn-force-install:hover:not(:disabled) { background: #3e9140; }
+      .btn-force-install:disabled { background: #666; }
+      .btn-exclude-confirm { background: #9c27b0; color: white; min-width: 175px; justify-content: center; }
+      .btn-exclude-confirm:hover:not(:disabled) { background: #7b1fa2; }
+      .btn-exclude-confirm:disabled { background: #666; }
+
+      .btn-icon-only { padding: 6px 10px; min-width: auto; }
       .btn-cancel { background: #f44336; color: white; }
       .btn-cancel:hover:not(:disabled) { background: #c62828; }
       .btn-cancel:disabled { opacity: 0.7; cursor: not-allowed; }
-      .btn-force-mode { background: #4caf50; color: white; }
-      .btn-force-mode:hover { background: #3e9140; }
-      .btn-force-install { background: #4caf50; color: white; }
-      .btn-force-install:hover:not(:disabled) { background: #3e9140; }
-      .btn-force-mode:disabled { background: #666; }
-      .btn-force-install, .btn-force-mode { min-width: 130px; justify-content: center; }
-      .btn-cancel-mode { background: #666; color: #eee; }
+      .btn-cancel-mode { background: #666; color: #eee; min-width: 45px; justify-content: center; font-size: 0.9em; font-weight: 600; }
       .btn-cancel-mode:hover { background: #555; }
-      .btn-cancel-mode { min-width: 45px; justify-content: center; }
-      .btn-cancel-mode { font-size: 0.9em; font-weight: 600; }
       .spinner {
         display: inline-block;
         width: 12px; height: 12px;
@@ -1385,9 +1480,10 @@ class ESPHomeUpdatePanel extends LitElement {
         font-size: 1em;
         padding: 8px 4px 2px;
       }
-      .content.compact .btn-batch-update { min-width: 140px; justify-content: center; }
+      .content.compact .btn-batch-update,
       .content.compact .btn-force-install,
-      .content.compact .btn-force-mode { min-width: 115px; justify-content: center; }
+      .content.compact .btn-exclude-confirm { min-width: 155px; justify-content: center; }
+      .content.compact .btn-mode-toggle { min-width: 44px; padding: 4px 8px; }
       .content.compact .btn-cancel-mode { min-width: 35px; padding: 4px 8px; }
       .content.compact .checkbox-col input[type="checkbox"],
       .content.compact .btn-select-all input[type="checkbox"],
@@ -1529,9 +1625,10 @@ render() {
                 ${this._showMenu ? this._renderMenu() : ""}
               </div>
             ` : ""}
+
             ${this.running ? html`
               <label class="btn-select-all" style="pointer-events: none;">
-                <input type="checkbox" disabled .checked=${false} .indeterminate=${false}>
+                <input type="checkbox" disabled .checked=${false}>
               </label>
               <button class="btn-cancel"
                 ?disabled=${this._cancelling}
@@ -1542,28 +1639,7 @@ render() {
                 ${this._cancelling ? "Cancelling…" : "⏹ Cancel"}
               </button>
               <span class="toolbar-info">${this._getStatusText()}</span>
-            ` : this._forceInstallMode ? html`
-              <label class="btn-select-all"
-                style="${forceSelectableCount === 0 ? 'pointer-events: none;' : ''}">
-                <input type="checkbox"
-                  .checked=${this.selected.size === forceSelectableCount && forceSelectableCount > 0}
-                  .indeterminate=${this.selected.size > 0 && this.selected.size < forceSelectableCount}
-                  ?disabled=${forceSelectableCount === 0}
-                  @change=${this._selectAll}>
-              </label>
-              <button class="btn-batch-update" disabled>
-                Firmware Update
-              </button>
-              <button class="btn-force-install"
-                ?disabled=${this.selected.size === 0}
-                @click=${this._startForceInstall}>
-                ▶ Force Install (${this.selected.size})
-              </button>
-              <button class="btn-cancel-mode btn-icon-only"
-                @click=${this._exitForceInstallMode}
-                title="Cancel force install mode">
-                ✕
-              </button>
+
             ` : this._updateMode ? html`
               <label class="btn-select-all"
                 style="${selectableCount === 0 ? 'pointer-events: none;' : ''}">
@@ -1573,39 +1649,73 @@ render() {
                   ?disabled=${selectableCount === 0}
                   @change=${this._selectAll}>
               </label>
-              <button class="btn-batch-update btn-update-active"
-                ?disabled=${this.selected.size === 0}
+              <button class="btn-batch-update"
                 @click=${() => this._startBatchUpdate().catch(e => {
                   this._addLocalResult("Batch update", "failed", "Batch update failed: " + String(e?.message || e));
                 })}>
                 ▶ Firmware Update (${this.selected.size})
               </button>
-              <button class="btn-force-mode" disabled>
-                Force Install
-              </button>
               <button class="btn-cancel-mode btn-icon-only"
                 @click=${this._exitUpdateMode}
-                title="Cancel update mode">
-                ✕
+                title="Cancel update mode">✕</button>
+
+            ` : this._forceInstallMode ? html`
+              <label class="btn-select-all"
+                style="${forceSelectableCount === 0 ? 'pointer-events: none;' : ''}">
+                <input type="checkbox"
+                  .checked=${this.selected.size === forceSelectableCount && forceSelectableCount > 0}
+                  .indeterminate=${this.selected.size > 0 && this.selected.size < forceSelectableCount}
+                  ?disabled=${forceSelectableCount === 0}
+                  @change=${this._selectAll}>
+              </label>
+              <button class="btn-force-install"
+                @click=${this._startForceInstall}>
+                ▶ Force Install (${this.selected.size})
               </button>
+              <button class="btn-cancel-mode btn-icon-only"
+                @click=${this._exitForceInstallMode}
+                title="Cancel force install mode">✕</button>
+
+            ` : this._excludeMode ? html`
+              <label class="btn-select-all">
+                <input type="checkbox"
+                  .checked=${this.selected.size === merged.filter(d => this._canExcludeSelect(d)).length && merged.filter(d => this._canExcludeSelect(d)).length > 0}
+                  .indeterminate=${this.selected.size > 0 && this.selected.size < merged.filter(d => this._canExcludeSelect(d)).length}
+                  @change=${this._selectAll}>
+              </label>
+              <button class="btn-exclude-confirm"
+                @click=${this._confirmExclude}>
+                ▶ Save Excluded (${this.selected.size})
+              </button>
+              <button class="btn-cancel-mode btn-icon-only"
+                @click=${this._exitExcludeMode}
+                title="Cancel exclude mode">✕</button>
+
             ` : html`
               <label class="btn-select-all" style="pointer-events: none;">
                 <input type="checkbox" disabled .checked=${false}>
               </label>
-              <button class="btn-batch-update"
+              <button class="btn-mode-toggle btn-upd"
                 ?disabled=${selectableCount === 0}
-                @click=${this._enterUpdateMode}>
-                Firmware Update
-              </button>
-              <button class="btn-force-mode" @click=${this._enterForceInstallMode}>
-                Force Install
-              </button>
+                title="Firmware Update"
+                @click=${this._enterUpdateMode}>UPD</button>
+              <button class="btn-mode-toggle btn-frc"
+                title="Force Install"
+                @click=${this._enterForceInstallMode}>FRC</button>
+              <button class="btn-mode-toggle btn-exc"
+                title="Exclude devices from auto-update"
+                @click=${this._enterExcludeMode}>EXC</button>
+              <button class="btn-mode-toggle btn-log-mode"
+                title="View update log"
+                @click=${this._openLogPopup}>LOG</button>
             `}
           </div>
         ` : ""}
 
           <div class="device-summary">
-            ${this._forceInstallMode
+            ${this._excludeMode
+              ? `Select devices to exclude from auto-update`
+              : this._forceInstallMode
               ? `${forceSelectableCount} device(s) available for force install`
               : `${merged.length} devices — ${onlineCount} online, ${offlineCount} offline${unknownCount > 0 ? `, ${unknownCount} unknown` : ""}${selectableCount > 0 ? ` — ${selectableCount} device${selectableCount !== 1 ? "s" : ""} can be updated` : " — No updates available"}`
             }
@@ -1654,9 +1764,12 @@ render() {
   _renderDevice(d) {
     const btn = this._getDeviceButton(d);
     const isPending = !!d.pending_force_install;
-    const inMode = this._forceInstallMode || this._updateMode;
-    const canSelect = this._forceInstallMode ? this._canForceSelect(d) : this._canSelect(d);
-    const showCheckbox = (inMode && canSelect) || isPending;
+    const inMode = this._forceInstallMode || this._updateMode || this._excludeMode;
+    let canSelect;
+    if (this._excludeMode) canSelect = this._canExcludeSelect(d);
+    else if (this._forceInstallMode) canSelect = this._canForceSelect(d);
+    else canSelect = this._canSelect(d);
+    const showCheckbox = inMode && canSelect;
     const isChecked = isPending || this.selected.has(d.entity_id);
     const isOffline = d.online === false;
     const displayName = (this._isMixedSetup && d.is_external)
