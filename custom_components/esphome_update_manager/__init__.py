@@ -14,7 +14,6 @@ from datetime import datetime, timedelta
 import voluptuous as vol
 
 from packaging.version import parse as parse_version
-from homeassistant.core import ServiceCall
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.components import websocket_api
 from homeassistant.components.frontend import async_register_built_in_panel
