@@ -19,10 +19,10 @@ A clear and concise description of what you expected to happen.
 **Screenshots**
 If applicable, add screenshots to help explain your problem.
 
-**ESPHome Update Manager:**
+**ESPHome Update Manager**
 - Version [e.g. 1.7.2]: 
 
-**Home Assistant:**
+**Home Assistant**
  - Version [e.g. 2026.5.0]: 
  - Host machine [e.g. Rpi, NUC]: 
 
