@@ -46,7 +46,7 @@ A custom Home Assistant integration that provides a dedicated panel and lovelace
 - **Batch updates** — Select multiple devices and update them sequentially with a single click
 - **Individual updates** — Update a single device directly from the panel
 - **Force Install** — Recompile and upload firmware via the ESPHome dashboard, even when no update is available. Also used for project version updates
-- **Pending Force Install for offline devices** — Queue offline (deep sleep) devices for force install; they are automatically installed as soon as they come online
+- **Pending Force Install for offline devices** — Queue offline (e.g. deep sleep) devices for force install; they are automatically installed as soon as they come online
 - **Project version auto-check** — Automatically detects and installs project version updates when a device comes online, HA restarts, or the external dashboard comes online
 - **Auto-update** — Automatically start updates when new firmware becomes available
 - **Enable firmware entities** — Disabled firmware update entities can be enabled directly from the panel
