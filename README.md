@@ -25,6 +25,7 @@ A custom Home Assistant integration that provides a dedicated panel and lovelace
     - [Pending force install for offline devices](#pending-force-install-for-offline-devices)
     - [Via service](#via-service-esphome-yaml-force-install)
     - [Project version auto-check](#project-version-auto-check)
+  - [Exclude devices from auto-update](#exclude-devices-from-auto-update)
   - [Auto-update](#auto-update)
   - [VS Code Server add-on](#vs-code-server-add-on)
   - [Results](#results)
@@ -50,6 +51,7 @@ A custom Home Assistant integration that provides a dedicated panel and lovelace
 - **Project version auto-check** — Automatically detects and installs project version updates when a device comes online, HA restarts, or the external dashboard comes online
 - **Auto-update** — Automatically start updates when new firmware becomes available
 - **Enable firmware entities** — Disabled firmware update entities can be enabled directly from the panel
+- **Exclude devices from auto-update** — Mark devices to be skipped by auto-update (and bulk firmware updates) while still allowing manual force install
 - **Skipped update detection** — Devices with updates skipped via Home Assistant are clearly marked
 - **Smart error handling** — Compile errors, OTA failures, and offline devices are detected and reported immediately
 - **Failure notifications** — Persistent notifications alert you when updates fail, with a link to the update log
@@ -187,19 +189,26 @@ align: center
 
 ### Toolbar
 
-The toolbar above the device list contains the main action buttons:
+The toolbar above the device list contains four mode buttons and a log shortcut:
+
+| Button | Color | Description |
+|--------|-------|-------------|
+| **UPD** | Blue | Enter Firmware Update mode — select devices to update |
+| **FRC** | Green | Enter Force Install mode — select devices to recompile and reinstall |
+| **EXC** | Purple | Enter Exclude mode — select devices to exclude from auto-update |
+| **LOG** | Teal | Open the latest update log |
+
+Once a mode is active, the toolbar switches to a confirm/cancel view:
 
 | Button | State | Description |
 |--------|-------|-------------|
-| **Firmware Update** (blue) | Updates available | Click to enter update mode and select devices to update |
-| **No Updates** (grey) | No updates available | Disabled — no devices have updates pending |
-| **▶ Update selected (n)** (blue) | Update mode active | Starts the update queue for the selected devices |
-| **Force Install** (green) | Always available | Click to enter Force Install mode and select devices to recompile |
-| **▶ Force Install (n)** (green) | Force Install mode active | Starts force install for the selected devices |
-| **✕** | Mode active | Exits the current mode without starting any action |
+| **▶ Firmware Update (n)** (blue) | Update mode | Starts the update queue for the selected devices. Click with 0 selected to exit the mode. |
+| **▶ Force Install (n)** (green) | Force Install mode | Starts force install for the selected devices, or saves the pending list when only offline devices are selected. Click with 0 selected to exit the mode. |
+| **▶ Save Excluded (n)** (purple) | Exclude mode | Saves the current selection as excluded devices. Saving with 0 selected clears the exclude list. |
+| **✕** | Any mode active | Exits the current mode without applying changes |
 | **⏹ Cancel** (red) | Updates running | Cancels the running update queue |
 
-Only one mode (update or force install) can be active at a time. The opposite button is disabled while a mode is active.
+Only one mode can be active at a time. The **UPD** button is disabled when no updates are available.
 
 ### Device list
 
@@ -219,6 +228,7 @@ The panel shows all ESPHome devices with:
 |--------|---------|
 | **Update** (blue) | Update ready to install — click to start |
 | **Up to date** (green) | Device is on the latest firmware |
+| **Excluded** (purple) | Device is excluded from auto-update and has an update available — manage via the **EXC** button |
 | **Skipped** (purple) | Update was skipped via Home Assistant — clear skip in HA to update |
 | **Enable** (orange) | Firmware entity is disabled — click to enable |
 | **Enabling…** (orange + spinner) | Entity is being enabled, waiting for HA to pick it up |
@@ -267,7 +277,7 @@ Devices that are offline (e.g., deep sleep devices) when you trigger a Force Ins
 **How it works:**
 
 1. Select one or more offline devices in Force Install mode (or pass them to the `esphome_update_manager.force_install` service) and confirm (Click **▶ Force Install (n)**)
-2. Each offline device is shown with the **Pending** label in the panel — its checkbox is checked and clicking it again removes the device from the pending list
+2. Each offline device is shown with the **Pending** label in the panel. To remove a device from the pending list, enter **FRC** mode again — pending devices appear pre-selected — uncheck them and click **▶ Force Install** to confirm.
 3. When a pending device comes online (status sensor goes `on` or ESPHome native API reconnects), the integration waits a short debounce window of ~15 seconds so multiple devices waking up at the same time can be batched
 4. Once ready, the force install starts automatically for all online pending devices in a single batch
 5. After the force install completes, the device is removed from the pending list — regardless of success or failure
@@ -353,6 +363,28 @@ The integration automatically checks whether the project version defined in the 
 - The device must have a `binary_sensor` status entity (see [Recommendations](#recommendations))
 - The ESPHome dashboard (local or external) must be accessible
 
+### Exclude devices from auto-update
+
+Sometimes you want certain devices to **not** be updated automatically — for example a critical device that you only want to update manually after testing, or a device with an unstable firmware version where you want to wait for the next release.
+
+**How it works:**
+
+1. Click **EXC** in the toolbar — the panel switches to Exclude mode and every device becomes selectable
+2. Devices that are already excluded appear **pre-selected**
+3. Check the devices you want to exclude (or uncheck devices you no longer want to exclude)
+4. Click **▶ Save Excluded (n)** to apply
+
+**Effects of excluding a device:**
+- The device is shown with a purple **Excluded** button instead of the usual **Update** button when an update is available
+- The device is **not** selectable in Firmware Update mode (UPD)
+- **Auto-update** skips the device, even if an update is available
+- **Force Install (FRC)** still works — exclude only applies to firmware updates, not to manual or service-triggered force installs
+- **Project version auto-check** still works — exclude does not affect force installs
+
+**Up-to-date excluded devices** show the regular **Up to date** button — the **Excluded** indication is only visible when an update is available, since that is when the exclusion actually has an effect.
+
+When you remove devices from the exclude list and confirm with **▶ Save Excluded**, the integration immediately checks whether any newly un-excluded devices now have updates available, and triggers auto-update for them if auto-update is enabled.
+
 ### Auto-update
 
 A checkbox enables automatic updates:
@@ -370,6 +402,8 @@ A checkbox enables automatic updates:
 - ESPHome is updated and devices now have newer firmware available
 - Home Assistant restarts and devices have pending updates
 - An external dashboard comes online and devices have pending updates
+
+**Note:** Excluded devices (see [Exclude devices from auto-update](#exclude-devices-from-auto-update)) are always skipped by auto-update, even when they have an update available.
 
 ### Service: Start Updates
 
