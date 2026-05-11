@@ -1,6 +1,7 @@
 """ESPHome Update Manager integration."""
 from __future__ import annotations
 
+import os
 import shutil
 import logging
 import json
@@ -12,6 +13,7 @@ from datetime import datetime, timedelta
 
 import voluptuous as vol
 
+from packaging.version import parse as parse_version
 from homeassistant.core import ServiceCall
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.components import websocket_api
@@ -24,6 +26,7 @@ from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.event import async_track_state_change_event, async_track_time_interval
 from homeassistant.helpers.storage import Store
 from homeassistant.helpers.start import async_at_started
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .const import (
     DOMAIN,
@@ -1093,8 +1096,6 @@ async def _setup_auto_update_listener(hass: HomeAssistant) -> None:
 
 async def _check_project_version_update(hass: HomeAssistant, entity_id: str) -> None:
     """Check if a device needs a project version update and force install if so."""
-    import re
-    from packaging.version import parse as parse_version
 
     # Find device via entity_id (status sensor → device)
     ent_reg = er.async_get(hass)
@@ -1577,13 +1578,15 @@ async def async_handle_force_install(hass: HomeAssistant, call: ServiceCall) -> 
 
 async def _supervisor_api(hass: HomeAssistant, method: str, path: str) -> dict | None:
     """Call the Supervisor API."""
-    import os
-    from homeassistant.helpers.aiohttp_client import async_get_clientsession
+
+    # Skip silently on non-Supervisor installs (Container / Core)
+    token = os.environ.get("SUPERVISOR_TOKEN")
+    if not token:
+        return None
 
     try:
         session = async_get_clientsession(hass)
         url = f"http://supervisor{path}"
-        token = os.environ.get("SUPERVISOR_TOKEN", "")
         headers = {"Authorization": f"Bearer {token}"}
 
         if method == "GET":
