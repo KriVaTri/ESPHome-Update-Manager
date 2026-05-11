@@ -115,12 +115,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         async def _connect_external_dashboard():
             try:
                 if await external_coordinator.async_check_connection(timeout=3):
-                    await external_coordinator.async_config_entry_first_refresh()
-                    _LOGGER.info(
-                        "Connected to external ESPHome dashboard at %s (version %s)",
-                        dashboard_url,
-                        external_coordinator.esphome_version,
-                    )
+                    await external_coordinator.async_refresh()
+                    if external_coordinator.last_update_success:
+                        _LOGGER.info(
+                            "Connected to external ESPHome dashboard at %s (version %s)",
+                            dashboard_url,
+                            external_coordinator.esphome_version,
+                        )
+                    else:
+                        _LOGGER.warning(
+                            "External ESPHome dashboard at %s reachable but initial "
+                            "data refresh failed: %s. Will retry periodically.",
+                            dashboard_url,
+                            external_coordinator.last_exception,
+                        )
                 else:
                     _LOGGER.warning(
                         "External ESPHome dashboard at %s is not reachable. "
