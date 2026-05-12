@@ -1452,7 +1452,7 @@ class ESPHomeUpdatePanel extends LitElement {
         padding: 0 4px;
         white-space: nowrap;
         overflow: hidden;
-        height: 20px;
+        height: 18px;
         line-height: 1;
         display: flex;
         align-items: center;
@@ -1538,7 +1538,7 @@ class ESPHomeUpdatePanel extends LitElement {
       }
       .content.compact .device-summary { 
         font-size: 0.8em;
-        height: 18px;
+        height: 16px;
         line-height: 1;
         padding: 3px 4px 0;
         margin: 4px 0 8px;
