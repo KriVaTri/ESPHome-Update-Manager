@@ -110,7 +110,11 @@ class ESPHomeUpdatePanel extends LitElement {
         this.requestUpdate();
       }
     };
+    this._resizeHandler = () => this._fitDeviceSummary();
+    window.addEventListener('resize', this._resizeHandler);
     window.addEventListener('scroll', this._scrollHandler, true);
+    window.addEventListener('touchmove', this._scrollHandler, { capture: true, passive: true });
+    window.addEventListener('wheel', this._scrollHandler, { capture: true, passive: true });
 
     this._documentClickHandler = (e) => {
       if (this._showMenu) {
@@ -160,6 +164,8 @@ class ESPHomeUpdatePanel extends LitElement {
     }
     if (this._scrollHandler) {
       window.removeEventListener('scroll', this._scrollHandler, true);
+      window.removeEventListener('touchmove', this._scrollHandler, true);
+      window.removeEventListener('wheel', this._scrollHandler, true);
     }
     if (this._documentClickHandler) {
       document.removeEventListener('click', this._documentClickHandler);
@@ -171,6 +177,9 @@ class ESPHomeUpdatePanel extends LitElement {
     if (this._devicesUpdatedSubscription) {
       this._devicesUpdatedSubscription();
       this._devicesUpdatedSubscription = null;
+    }
+    if (this._resizeHandler) {
+      window.removeEventListener('resize', this._resizeHandler);
     }
   }
 
@@ -213,6 +222,7 @@ class ESPHomeUpdatePanel extends LitElement {
   }
 
   updated(changedProps) {
+    this._fitDeviceSummary();
     if (changedProps.has("cardMode")) {
       if (this.cardMode) {
         this.setAttribute('cardmode', '');
@@ -1086,6 +1096,38 @@ class ESPHomeUpdatePanel extends LitElement {
     return d.device_id && d.entity_id;
   }
 
+  _fitDeviceSummary() {
+    const el = this.shadowRoot?.querySelector('.device-summary');
+    if (!el) return;
+
+    requestAnimationFrame(() => {
+      el.style.fontSize = '';
+      const cs = getComputedStyle(el);
+      const padLeft = parseFloat(cs.paddingLeft) || 0;
+      const padRight = parseFloat(cs.paddingRight) || 0;
+      const availWidth = el.getBoundingClientRect().width - padLeft - padRight;
+      if (availWidth <= 0) return;
+
+      const measure = document.createElement('span');
+      measure.style.cssText = 'visibility:hidden; position:absolute; white-space:nowrap; font: inherit;';
+      measure.textContent = el.textContent.trim();
+      el.appendChild(measure);
+      const textWidth = measure.getBoundingClientRect().width;
+      el.removeChild(measure);
+      if (textWidth <= 0) return;
+
+      const baseSize = parseFloat(cs.fontSize);
+      const isCompact = !!el.closest('.content.compact');
+      const minSize = 9;
+      const maxSize = isCompact ? 12 : 12;
+
+      const ratio = availWidth / textWidth;
+      let newSize = baseSize * ratio * 0.99;
+      newSize = Math.max(minSize, Math.min(maxSize, newSize));
+      el.style.fontSize = newSize.toFixed(1) + 'px';
+    });
+  }
+
   _showNameTooltip(e, name) {
     const el = e.target;
     if (el.scrollWidth > el.clientWidth) {
@@ -1239,6 +1281,14 @@ class ESPHomeUpdatePanel extends LitElement {
         margin: 0;
         border-bottom: 1.5px solid #888; /* fallback */
         border-bottom: 1.5px solid color-mix(in srgb, var(--secondary-text-color) 80%, transparent);
+      }
+      .excluded-mark {
+        color: var(--secondary-text-color);
+        font-size: 15px;
+        line-height: 1;
+        user-select: none;
+        display: inline-block;
+        transform: translateY(-1px);
       }
       .device-row {
         display: flex; align-items: center; gap: 12px;
@@ -1395,7 +1445,19 @@ class ESPHomeUpdatePanel extends LitElement {
         display: flex; align-items: center; gap: 8px;
         padding: 4px 0;
       }
-      .device-summary { color: #777; font-size: 0.9em; margin: 4px 0 8px; padding: 0 4px; }
+      .device-summary {
+        color: #777;
+        font-size: 0.8em;
+        margin: 4px 0 8px;
+        padding: 0 4px;
+        white-space: nowrap;
+        overflow: hidden;
+        height: 20px;
+        line-height: 1;
+        display: flex;
+        align-items: center;
+        text-overflow: ellipsis;
+      }
       .log-overlay {
         position: fixed; top: 0; left: 0; right: 0; bottom: 0;
         background: rgba(0,0,0,0.7);
@@ -1459,6 +1521,10 @@ class ESPHomeUpdatePanel extends LitElement {
         padding: 4px 12px;
         margin: 4px 0;
       }
+      .content.compact .excluded-mark {
+        font-size: 13px;
+        transform: translateY(-1px);
+      }
       .content.compact button {
         padding: 4px 12px;
         font-size: 0.8em;
@@ -1470,8 +1536,17 @@ class ESPHomeUpdatePanel extends LitElement {
       .content.compact .version {
         font-size: 0.75em;
       }
-      .content.compact .device-summary {
+      .content.compact .device-summary { 
         font-size: 0.8em;
+        height: 18px;
+        line-height: 1;
+        padding: 3px 4px 0;
+        margin: 4px 0 8px;
+        white-space: nowrap;
+        overflow: hidden;
+        display: flex;
+        align-items: center;
+        text-overflow: ellipsis;
       }
       .content.compact .result-row {
         font-size: 0.85em;
@@ -1494,6 +1569,8 @@ class ESPHomeUpdatePanel extends LitElement {
       @media (pointer: coarse) {
         button.btn-cancel-mode { font-size: 1.3em; font-weight: 700; }
         .content.compact button.btn-cancel-mode { font-size: 1.2em; font-weight: 700; }
+        .excluded-mark { font-size: 25px; }
+        .content.compact .excluded-mark { font-size: 23px; }
       }
       @media (max-width: 600px) and (pointer: coarse) {
         .checkbox-col input[type="checkbox"],
@@ -1515,6 +1592,8 @@ class ESPHomeUpdatePanel extends LitElement {
         .content.compact .btn-cancel-mode { font-size: 1em; }
         button.btn-cancel-mode { font-size: 1.3em; font-weight: 700; }
         .content.compact button.btn-cancel-mode { font-size: 1.2em; font-weight: 700; }
+        .excluded-mark { font-size: 25px; }
+        .content.compact .excluded-mark { font-size: 23px; }
         .content { padding-left: 0; padding-right: 0; }
         .device-row { padding-left: 9px; padding-right: 10px; }
         .toolbar { margin-left: 0; padding-left: 10px; }
@@ -1714,10 +1793,17 @@ render() {
 
           <div class="device-summary">
             ${this._excludeMode
-              ? `Select devices to exclude from auto-update`
+              ? `Select devices to exclude from auto-update — ${this.selected.size} device${this.selected.size !== 1 ? "s" : ""} selected`
               : this._forceInstallMode
-              ? `${forceSelectableCount} device(s) available for force install`
-              : `${merged.length} devices — ${onlineCount} online, ${offlineCount} offline${unknownCount > 0 ? `, ${unknownCount} unknown` : ""}${selectableCount > 0 ? ` — ${selectableCount} device${selectableCount !== 1 ? "s" : ""} can be updated` : " — No updates available"}`
+              ? `${forceSelectableCount} device(s) available for force install — ${this.selected.size} selected`
+              : (() => {
+                  const excludedCount = merged.filter((d) => d.excluded).length;
+                  const pendingCount = merged.filter((d) => d.pending_force_install).length;
+                  const updatableStr = selectableCount > 0
+                    ? ` — ${selectableCount} device${selectableCount !== 1 ? "s" : ""} can be updated`
+                    : " — No updates available";
+                  return `${merged.length} devices — ${onlineCount} online, ${offlineCount} offline${unknownCount > 0 ? `, ${unknownCount} unknown` : ""}, ${pendingCount} pending, ${excludedCount} excluded${updatableStr}`;
+                })()
             }
           </div>
 
@@ -1742,7 +1828,7 @@ render() {
     return html`
       <div class="header-menu">
         <button class="menu-item current-log" @click=${this._openLogPopup}>
-          📄 Latest Log
+          📋 Latest Log
         </button>
         ${this._logBackups.length > 0 ? html`
           <div class="menu-divider"></div>
@@ -1770,7 +1856,7 @@ render() {
     else if (this._forceInstallMode) canSelect = this._canForceSelect(d);
     else canSelect = this._canSelect(d);
     const showCheckbox = inMode && canSelect;
-    const isChecked = isPending || this.selected.has(d.entity_id);
+    const isChecked = (this._forceInstallMode && isPending) || this.selected.has(d.entity_id);
     const isOffline = d.online === false;
     const displayName = (this._isMixedSetup && d.is_external)
       ? `${d.name} (ext)`
@@ -1784,6 +1870,8 @@ render() {
               .checked=${isChecked}
               ?disabled=${this.running}
               @change=${() => this._handleCheckboxChange(d)} />
+          ` : d.excluded && !inMode ? html`
+            <span class="excluded-mark" title="Excluded from auto-update">⊘</span>
           ` : html`
             <input type="checkbox" disabled .checked=${false} />
           `}
@@ -1817,7 +1905,7 @@ render() {
           <h3>Results</h3>
           ${!this.running ? html`
             ${hasUpdateResults ? html`
-              <button class="btn-log" @click=${this._openLogPopup}>📄 View Log</button>
+              <button class="btn-log" @click=${this._openLogPopup}>📋 View Log</button>
             ` : ""}
             <button class="btn-clear" @click=${this._clearResults}>✕ Clear</button>
           ` : ""}
