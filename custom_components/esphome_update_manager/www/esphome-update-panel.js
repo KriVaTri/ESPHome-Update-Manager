@@ -1208,7 +1208,7 @@ class ESPHomeUpdatePanel extends LitElement {
         border-radius: 0;
       }
       .menu-item:last-child { border-bottom: none; }
-      .menu-item:hover { background: var(--secondary-background-color, #f5f5f5); }
+      .menu-item:hover { background: rgba(128,128,128,0.2); }
       .menu-item.current-log { font-size: 16px; }
       .menu-section-title {
         padding: 8px 16px 4px;
