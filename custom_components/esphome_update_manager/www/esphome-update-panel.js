@@ -1795,7 +1795,7 @@ render() {
             ${this._excludeMode
               ? `Select devices to exclude from auto-update — ${this.selected.size} device${this.selected.size !== 1 ? "s" : ""} selected`
               : this._forceInstallMode
-              ? `Select devices to force intsall — ${this.selected.size} device${this.selected.size !== 1 ? "s" : ""} selected`
+              ? `Select devices to force install — ${this.selected.size} device${this.selected.size !== 1 ? "s" : ""} selected`
               : (() => {
                   const excludedCount = merged.filter((d) => d.excluded).length;
                   const pendingCount = merged.filter((d) => d.pending_force_install).length;
