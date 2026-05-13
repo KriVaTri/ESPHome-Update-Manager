@@ -296,11 +296,11 @@ class ESPHomeUpdatePanel extends LitElement {
     try {
       const res = await this.hass.callWS({ type: "esphome_update_manager/get_update_log" });
       this._logContent = res.exists ? res.content : "No update log available yet.";
-      this._logTitle = res.exists ? "📄 Latest Update Log" : "📄 Update Log";
+      this._logTitle = res.exists ? "📋 Latest Update Log" : "📋 Update Log";
       this._showLogPopup = true;
     } catch (e) {
       this._logContent = "Failed to load update log.";
-      this._logTitle = "📄 Update Log";
+      this._logTitle = "📋 Update Log";
       this._showLogPopup = true;
     }
     this._showMenu = false;
@@ -1808,10 +1808,10 @@ render() {
                 title="Force Install"
                 @click=${this._enterForceInstallMode}>FRC</button>
               <button class="btn-mode-toggle btn-exc"
-                title="Exclude devices from auto-update"
+                title="Exclude devices from update"
                 @click=${this._enterExcludeMode}>EXC</button>
               <button class="btn-mode-toggle btn-log-mode"
-                title="View update log"
+                title="View latest log"
                 @click=${this._openLogPopup}>LOG</button>
             `}
           </div>
@@ -1899,7 +1899,7 @@ render() {
               ?disabled=${this.running}
               @change=${() => this._handleCheckboxChange(d)} />
           ` : d.excluded && !inMode ? html`
-            <span class="excluded-mark" title="Excluded from auto-update">⊘</span>
+            <span class="excluded-mark" title="Excluded from update">⊘</span>
           ` : html`
             <input type="checkbox" disabled .checked=${false} />
           `}
