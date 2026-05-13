@@ -1906,8 +1906,7 @@ render() {
         </span>
         <span class="online-status">${this._onlineIcon(d.online)}</span>
         <span class="name ${d.failed ? 'failed' : ''}"
-          @click=${(e) => { e.stopPropagation(); this._showNameTooltip(e, d.name); }}
-          title="${d.name}">
+          @click=${(e) => { e.stopPropagation(); this._showNameTooltip(e, d.name); }}>
           ${displayName}
         </span>
         <span class="version"
@@ -1917,10 +1916,7 @@ render() {
               ? `${d.current_version || "?"} → ${d.latest_version}`
               : (d.current_version || "?");
             this._showNameTooltip(e, fullText);
-          }}
-          title="${(d.update_available || d.skipped) && d.latest_version
-            ? `${d.current_version || "?"} → ${d.latest_version}`
-            : (d.current_version || "?")}">
+          }}>
           ${d.current_version || "?"}${(d.update_available || d.skipped) && d.latest_version
             ? html` <span class="arrow">→</span> ${d.latest_version}`
             : ""}
