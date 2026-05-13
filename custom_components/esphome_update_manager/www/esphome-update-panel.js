@@ -106,8 +106,12 @@ class ESPHomeUpdatePanel extends LitElement {
 
     this._scrollHandler = () => {
       if (this._tooltipName) {
-        this._tooltipName = null;
-        this.requestUpdate();
+        if (this._tooltipJustOpened) {
+          this._tooltipJustOpened = false;
+        } else {
+          this._tooltipName = null;
+          this.requestUpdate();
+        }
       }
     };
     this._resizeHandler = () => this._fitDeviceSummary();
@@ -125,6 +129,10 @@ class ESPHomeUpdatePanel extends LitElement {
           this._showMenu = false;
           this.requestUpdate();
         }
+      }
+      if (this._tooltipName) {
+        this._tooltipName = null;
+        this.requestUpdate();
       }
     };
     document.addEventListener('click', this._documentClickHandler);
@@ -1313,7 +1321,16 @@ class ESPHomeUpdatePanel extends LitElement {
         padding: 6px 16px;
       }
       .online-status { flex: 0 0 20px; text-align: center; font-size: 0.75em; }
-      .version { color: #666; font-size: 0.85em; white-space: nowrap; }
+      .version {
+        color: #666;
+        font-size: 0.85em;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        min-width: 0;
+        flex-shrink: 1;
+        max-width: 25%;
+      }
       .version .arrow { color: #4caf50; font-weight: bold; }
       .checkbox-col { flex: 0 0 24px; display: flex; align-items: center; justify-content: center; }
       .checkbox-col input[type="checkbox"] {
@@ -1496,7 +1513,7 @@ class ESPHomeUpdatePanel extends LitElement {
         max-width: 80vw; word-wrap: break-word;
         box-shadow: 0 2px 10px rgba(0,0,0,0.3);
         transform: translate(-50%, -100%) translateY(-10px);
-        pointer-events: none;
+        cursor: pointer;
       }
       .name {
         flex: 1; font-weight: 500;
@@ -1627,7 +1644,9 @@ render() {
 
     return html`
       ${this._tooltipName ? html`
-        <div class="name-tooltip" style="top: ${this._tooltipY}px; left: ${this._tooltipX}px">
+        <div class="name-tooltip"
+          style="top: ${this._tooltipY}px; left: ${this._tooltipX}px"
+          @click=${() => { this._tooltipName = null; this.requestUpdate(); }}>
           ${this._tooltipName}
         </div>
       ` : ""}
@@ -1880,11 +1899,21 @@ render() {
         </span>
         <span class="online-status">${this._onlineIcon(d.online)}</span>
         <span class="name ${d.failed ? 'failed' : ''}"
-          @click=${(e) => this._showNameTooltip(e, d.name)}
+          @click=${(e) => { e.stopPropagation(); this._showNameTooltip(e, d.name); }}
           title="${d.name}">
           ${displayName}
         </span>
-        <span class="version">
+        <span class="version"
+          @click=${(e) => {
+            e.stopPropagation();
+            const fullText = (d.update_available || d.skipped) && d.latest_version
+              ? `${d.current_version || "?"} → ${d.latest_version}`
+              : (d.current_version || "?");
+            this._showNameTooltip(e, fullText);
+          }}
+          title="${(d.update_available || d.skipped) && d.latest_version
+            ? `${d.current_version || "?"} → ${d.latest_version}`
+            : (d.current_version || "?")}">
           ${d.current_version || "?"}${(d.update_available || d.skipped) && d.latest_version
             ? html` <span class="arrow">→</span> ${d.latest_version}`
             : ""}
