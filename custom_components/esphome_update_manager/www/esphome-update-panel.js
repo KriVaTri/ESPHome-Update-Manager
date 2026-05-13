@@ -1327,9 +1327,8 @@ class ESPHomeUpdatePanel extends LitElement {
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
-        min-width: 0;
-        flex-shrink: 1;
-        max-width: 25%;
+        min-width: 2ch;
+        flex-shrink: 2;
       }
       .version .arrow { color: #4caf50; font-weight: bold; }
       .checkbox-col { flex: 0 0 24px; display: flex; align-items: center; justify-content: center; }
@@ -1516,9 +1515,12 @@ class ESPHomeUpdatePanel extends LitElement {
         cursor: pointer;
       }
       .name {
-        flex: 1; font-weight: 500;
-        overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-        min-width: 0;
+        flex: 1;
+        font-weight: 500;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        min-width: 5ch;
       }
       .card-title {
         font-size: 1.2em;
