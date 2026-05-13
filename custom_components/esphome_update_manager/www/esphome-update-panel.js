@@ -1506,10 +1506,15 @@ class ESPHomeUpdatePanel extends LitElement {
       }
       .name-tooltip {
         position: fixed;
-        background: #333; color: white;
-        padding: 8px 12px; border-radius: 8px;
-        font-size: 0.9em; z-index: 1000;
-        max-width: 80vw; word-wrap: break-word;
+        border: 1px solid color-mix(in srgb, var(--primary-text-color, #eee) 20%, transparent);
+        background: var(--secondary-background-color, #333);
+        color: var(--primary-text-color, #eee);
+        padding: 8px 12px;
+        border-radius: 8px;
+        font-size: 0.9em;
+        z-index: 1000;
+        max-width: 80vw;
+        word-wrap: break-word;
         box-shadow: 0 2px 10px rgba(0,0,0,0.3);
         transform: translate(-50%, -100%) translateY(-10px);
         cursor: pointer;
