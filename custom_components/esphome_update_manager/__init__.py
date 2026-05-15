@@ -99,6 +99,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         _LOGGER.debug("Local ESPHome dashboard API not available")
 
     hass.data[DOMAIN]["local_yaml_cache"] = {}
+    hass.data[DOMAIN]["project_version_cache"] = {}
 
     # Setup external dashboard if configured
     if dashboard_url:
@@ -264,6 +265,19 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     hass.async_create_task(store.async_save(settings))
                 _LOGGER.debug("Removed %d stale excluded devices after device removal", len(to_remove_exc))
 
+        # Cleanup project_version_cache for removed devices
+        pv_cache: dict = hass.data[DOMAIN].get("project_version_cache", {})
+        if pv_cache:
+            to_remove_pv = [
+                did for did in pv_cache
+                if dev_reg.async_get(did) is None
+            ]
+            if to_remove_pv:
+                for did in to_remove_pv:
+                    del pv_cache[did]
+                hass.data[DOMAIN]["project_version_cache"] = pv_cache
+                _LOGGER.debug("Removed %d stale project version cache entries after device removal", len(to_remove_pv))
+
     unsub_device_registry = hass.bus.async_listen(
         dr.EVENT_DEVICE_REGISTRY_UPDATED,
         _handle_device_registry_updated,
@@ -299,6 +313,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     websocket_api.async_register_command(hass, ws_add_pending_force_install)
     websocket_api.async_register_command(hass, ws_remove_pending_force_install)
     websocket_api.async_register_command(hass, ws_set_excluded_devices)
+    websocket_api.async_register_command(hass, ws_refresh_project_versions)
 
     # Register static paths to serve frontend files directly from the
     # custom_components folder. This avoids any dependency on <config>/www/.
@@ -420,6 +435,35 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         }),
     )
 
+    # Refresh project versions service (for use in automations)
+    async def _handle_refresh_project_versions(call: ServiceCall) -> None:
+        local_coordinator = hass.data[DOMAIN].get("local_dashboard")
+        if local_coordinator:
+            try:
+                await local_coordinator.async_request_refresh()
+            except Exception as err:
+                _LOGGER.debug("Local dashboard refresh failed during service call: %s", err)
+
+        external_coordinator = hass.data[DOMAIN].get("external_dashboard")
+        if external_coordinator:
+            try:
+                await external_coordinator.async_request_refresh()
+            except Exception as err:
+                _LOGGER.debug("External dashboard refresh failed during service call: %s", err)
+
+        await _check_all_devices_project_version(hass)
+        await _check_pending_force_installs(hass)
+        await _check_and_start_auto_update(hass)
+        hass.bus.async_fire("esphome_update_manager_devices_updated")
+        _LOGGER.info("refresh_project_versions service triggered")
+
+    hass.services.async_register(
+        DOMAIN,
+        "refresh_project_versions",
+        _handle_refresh_project_versions,
+        schema=vol.Schema({}),
+    )
+
     # Setup auto-update listener if enabled (after HA is fully started)
     if stored_settings.get("auto_update_enabled", False):
         hass.async_create_task(_delayed_setup_auto_update(hass))
@@ -527,12 +571,14 @@ async def _setup_always_on_status_listener(hass: HomeAssistant) -> None:
         hass.async_create_task(_delayed_check())
 
     async def _check_all_online_devices() -> None:
-        """Check all currently online devices for project version updates."""
-        _LOGGER.debug("Checking all online devices for project version updates")
+        """Check all devices (online + offline) for project version updates.
+
+        Offline devices only update the cache (so the frontend can show the
+        pending bump) — they are not queued for auto force install.
+        """
+        _LOGGER.debug("Checking all devices for project version updates")
         for entity_id in all_status_entity_ids:
-            state = hass.states.get(entity_id)
-            if state and state.state == "on":
-                hass.async_create_task(_check_project_version_update(hass, entity_id))
+            hass.async_create_task(_check_project_version_update(hass, entity_id))
 
     @callback
     def _handle_dashboard_available(event: Event) -> None:
@@ -883,6 +929,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Remove services
     hass.services.async_remove(DOMAIN, "start_updates")
     hass.services.async_remove(DOMAIN, "force_install")
+    hass.services.async_remove(DOMAIN, "refresh_project_versions")
     
     hass.data[DOMAIN].pop("queue", None)
     hass.data[DOMAIN].pop("store", None)
@@ -897,6 +944,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data[DOMAIN].pop("pending_project_install_timer", None)
     hass.data[DOMAIN].pop("pending_force_install_timer", None)
     hass.data[DOMAIN].pop("pending_force_install_retry", None)
+    hass.data[DOMAIN].pop("project_version_cache", None)
+    hass.data[DOMAIN].pop("project_version_check_running", None)
     return True
 
 
@@ -1102,13 +1151,16 @@ async def _setup_auto_update_listener(hass: HomeAssistant) -> None:
 
 
 async def _check_project_version_update(hass: HomeAssistant, entity_id: str) -> None:
-    """Check if a device needs a project version update and force install if so."""
+    """Check if a device needs a project version update.
+
+    Cache update always runs (so frontend can show pending bumps).
+    Auto force install only runs if settings allow it.
+    """
 
     # Find device via entity_id (status sensor → device)
     ent_reg = er.async_get(hass)
     dev_reg = dr.async_get(hass)
 
-    # entity_id is a binary_sensor status entity → find its device
     entity = ent_reg.async_get(entity_id)
     if not entity or not entity.device_id:
         return
@@ -1127,13 +1179,10 @@ async def _check_project_version_update(hass: HomeAssistant, entity_id: str) -> 
 
     display_name = device.name_by_user or original_name
 
-    # Skip excluded devices
-    excluded_devices = hass.data[DOMAIN].get("excluded_devices", {})
-    if entity.device_id in excluded_devices:
-        _LOGGER.debug("%s: device is excluded, skipping project version check", display_name)
-        return
+    # NOTE: excluded check moved below — we still want to cache the bump
+    # so the frontend can show it. Excluded only prevents the auto force install.
 
-    # Skip if device was recently successfully updated
+    # Skip if device was recently successfully updated — also clear stale cache
     queue = hass.data[DOMAIN].get("queue")
     if queue:
         for result in queue.results:
@@ -1142,23 +1191,22 @@ async def _check_project_version_update(hass: HomeAssistant, entity_id: str) -> 
                     "%s: Recently successfully updated, skipping project version check",
                     display_name
                 )
+                cache = hass.data[DOMAIN].get("project_version_cache", {})
+                if cache.pop(entity.device_id, None) is not None:
+                    hass.bus.async_fire("esphome_update_manager_devices_updated")
                 return
-                
-    # Get raw sw_version — format: "1.0.2 (ESPHome 2026.3.1)"
+
     raw_version = device.sw_version
     if not raw_version:
         return
 
-    # Extract project version: "1.0.2 (ESPHome ...)" → "1.0.2"
     match = re.match(r'^([\d.]+)\s*\(ESPHome', str(raw_version))
     if not match:
-        # No project version in sw_version → skip
         _LOGGER.debug("%s: No project version in sw_version (%s), skipping project version check", display_name, raw_version)
         return
 
     device_project_version = match.group(1)
 
-    # Find the right coordinator and configuration
     local_coordinator = hass.data[DOMAIN].get("local_dashboard")
     external_coordinator = hass.data[DOMAIN].get("external_dashboard")
 
@@ -1186,7 +1234,6 @@ async def _check_project_version_update(hass: HomeAssistant, entity_id: str) -> 
     if not configuration.endswith(".yaml"):
         configuration = f"{configuration}.yaml"
 
-    # Get yaml config and extract project version
     try:
         config = await coordinator.async_get_config(configuration)
     except Exception as err:
@@ -1203,7 +1250,6 @@ async def _check_project_version_update(hass: HomeAssistant, entity_id: str) -> 
         _LOGGER.debug("%s: No project version in yaml, skipping", display_name)
         return
 
-    # Compare versions
     try:
         yaml_v = parse_version(yaml_version)
         device_v = parse_version(device_project_version)
@@ -1211,8 +1257,50 @@ async def _check_project_version_update(hass: HomeAssistant, entity_id: str) -> 
         _LOGGER.warning("%s: Failed to parse project versions (yaml=%s, device=%s): %s", display_name, yaml_version, device_project_version, err)
         return
 
-    if yaml_v <= device_v:
+    # Update cache (used by frontend to show pending project bumps)
+    cache = hass.data[DOMAIN].setdefault("project_version_cache", {})
+    if yaml_v > device_v:
+        prev = cache.get(entity.device_id)
+        cache[entity.device_id] = yaml_version
+        if prev != yaml_version:
+            hass.bus.async_fire("esphome_update_manager_devices_updated")
+    else:
+        # No bump (or downgrade) — clear any stale cache entry
+        if cache.pop(entity.device_id, None) is not None:
+            hass.bus.async_fire("esphome_update_manager_devices_updated")
         _LOGGER.debug("%s: Project version up to date (yaml=%s, device=%s)", display_name, yaml_version, device_project_version)
+        return
+
+    # Cache is updated. Now decide whether we should auto force install.
+    settings = hass.data[DOMAIN].get("settings", {})
+    if not settings.get("auto_update_enabled", False):
+        _LOGGER.debug(
+            "%s: project bump cached but auto-update disabled, not queuing", display_name,
+        )
+        return
+    if settings.get("auto_update_scope", "firmware") == "firmware":
+        _LOGGER.debug(
+            "%s: project bump cached but scope=firmware, not queuing", display_name,
+        )
+        return
+
+    # Excluded? Cache has been updated above so frontend will still show the bump.
+    excluded_devices = hass.data[DOMAIN].get("excluded_devices", {})
+    if entity.device_id in excluded_devices:
+        _LOGGER.debug(
+            "%s: device is excluded, project bump cached for frontend but not queued",
+            display_name,
+        )
+        return
+
+    # Only queue auto force install when device is actually online — offline
+    # devices will be picked up by the online-flow when they come back.
+    state = hass.states.get(entity_id)
+    if not (state and state.state == "on"):
+        _LOGGER.debug(
+            "%s: project bump cached but device offline, not queuing",
+            display_name,
+        )
         return
 
     _LOGGER.info(
@@ -1235,40 +1323,56 @@ async def _check_project_version_update(hass: HomeAssistant, entity_id: str) -> 
     async def _flush_pending():
         await asyncio.sleep(15)
         hass.data[DOMAIN].pop("pending_project_install_timer", None)
-        pending = hass.data[DOMAIN].pop("pending_project_installs", {})
-        if not pending:
-            return
-        queue: UpdateQueue = hass.data[DOMAIN]["queue"]
-        if queue.is_running:
-            hass.data[DOMAIN]["pending_project_installs"] = pending
-            async def _retry():
-                await asyncio.sleep(60)
-                await _flush_pending_project_installs(hass)
-            hass.async_create_task(_retry())
-            return
-        force_install_devices = list(pending.values())
-        _LOGGER.info(
-            "Starting force install for %d device(s) with project version update: %s",
-            len(force_install_devices),
-            [d["name"] for d in force_install_devices],
-        )
-        stop_addon_slug = None
         settings = hass.data[DOMAIN].get("settings", {})
-        if settings.get("stop_addon_during_update", True):
-            addon_info = await async_get_addon_info(hass, VSCODE_ADDON_SLUG)
-            if addon_info and addon_info.get("state") == "started":
-                stop_addon_slug = VSCODE_ADDON_SLUG
-        try:
-            queue.start(
-                entity_ids=[d["entity_id"] for d in force_install_devices],
-                force_install_devices=force_install_devices,
-                stop_addon_slug=stop_addon_slug,
-            )
-        except RuntimeError as err:
-            _LOGGER.warning("Failed to start force install for project version: %s", err)
+        if (
+            not settings.get("auto_update_enabled", False)
+            or settings.get("auto_update_scope", "firmware") == "firmware"
+        ):
+            hass.data[DOMAIN].pop("pending_project_installs", None)
+            return
+        await _flush_pending_project_installs(hass)
 
     hass.data[DOMAIN]["pending_project_install_timer"] = True
     hass.async_create_task(_flush_pending())
+
+
+async def _check_all_devices_project_version(hass: HomeAssistant) -> None:
+    """Trigger a project version check on all ESPHome devices (online + offline).
+
+    For offline devices, only the cache is updated (so the frontend can show
+    the pending bump). Auto force install is only queued for online devices.
+
+    Dedup guard: if a check is already running, a second concurrent call is
+    skipped to avoid duplicate yaml fetches when the user rapidly toggles
+    settings or clicks refresh.
+    """
+    if hass.data[DOMAIN].get("project_version_check_running"):
+        _LOGGER.debug("Project version check already in progress, skipping duplicate")
+        return
+
+    hass.data[DOMAIN]["project_version_check_running"] = True
+    try:
+        ent_reg = er.async_get(hass)
+        esphome_device_ids = _get_esphome_device_ids(hass)
+
+        status_entity_ids = [
+            entity.entity_id
+            for entity in ent_reg.entities.values()
+            if (
+                entity.domain == "binary_sensor"
+                and entity.platform == "esphome"
+                and entity.entity_id.endswith("_status")
+                and entity.disabled_by is None
+                and entity.device_id in esphome_device_ids
+            )
+        ]
+
+        await asyncio.gather(
+            *[_check_project_version_update(hass, eid) for eid in status_entity_ids],
+            return_exceptions=True,
+        )
+    finally:
+        hass.data[DOMAIN].pop("project_version_check_running", None)
 
 
 async def _flush_pending_project_installs(hass: HomeAssistant) -> None:
@@ -1284,6 +1388,42 @@ async def _flush_pending_project_installs(hass: HomeAssistant) -> None:
             await asyncio.sleep(60)
             await _flush_pending_project_installs(hass)
         hass.async_create_task(_retry())
+        return
+
+    # Re-validate: drop entries whose project bump is no longer pending
+    # (e.g. a firmware update meanwhile recompiled the yaml and applied it).
+    pv_cache = hass.data[DOMAIN].get("project_version_cache", {})
+    dev_reg = dr.async_get(hass)
+    stale_ids = []
+    for device_id in list(pending.keys()):
+        device = dev_reg.async_get(device_id)
+        if not device:
+            stale_ids.append(device_id)
+            continue
+        # If cache no longer has this device, the bump was already applied
+        if device_id not in pv_cache:
+            stale_ids.append(device_id)
+            continue
+        # Double-check vs current sw_version
+        raw = device.sw_version
+        if raw:
+            match = re.match(r'^([\d.]+)\s*\(ESPHome', str(raw))
+            if match:
+                try:
+                    if parse_version(match.group(1)) >= parse_version(pv_cache[device_id]):
+                        stale_ids.append(device_id)
+                        continue
+                except Exception:
+                    pass
+
+    for sid in stale_ids:
+        pending.pop(sid, None)
+        _LOGGER.debug(
+            "Dropped stale pending project install for %s (bump already applied)",
+            sid,
+        )
+
+    if not pending:
         return
 
     force_install_devices = list(pending.values())
@@ -1309,12 +1449,6 @@ async def _flush_pending_project_installs(hass: HomeAssistant) -> None:
         
 
 async def _build_version_info_for_devices(hass: HomeAssistant, devices: list[dict]) -> tuple[list[str], dict]:
-    """Build updatable entity list and version_info dict with correct project versions.
-    
-    Returns (updatable, version_info) where:
-    - updatable: list of entity_ids that can be updated
-    - version_info: dict with from/to/name/device_id per entity_id
-    """
     updatable = []
     version_info = {}
 
@@ -1324,10 +1458,15 @@ async def _build_version_info_for_devices(hass: HomeAssistant, devices: list[dic
         new_project_version = None
         if from_ver and re.match(r'^([\d.]+)\s*\(ESPHome', str(from_ver)):
             new_project_version = await _get_yaml_project_version(hass, d)
+
+        # Extract pure ESPHome version from latest_version (which may be
+        # formatted as "2026.4.5 (2.29)" after pv_cache enrichment)
+        latest_esphome = _extract_esphome_version(d["latest_version"]) or d["latest_version"]
+
         updatable.append(entity_id)
         version_info[entity_id] = {
-            "from": from_ver,
-            "to": _build_to_version(from_ver, d["latest_version"], new_project_version),
+            "from": _strip_sw_version_timestamp(from_ver),
+            "to": _build_to_version(from_ver, latest_esphome, new_project_version),
             "name": d["name"],
             "device_id": d["device_id"],
         }
@@ -1339,6 +1478,11 @@ async def _check_and_start_auto_update(hass: HomeAssistant) -> None:
     settings = hass.data[DOMAIN].get("settings", {})
 
     if not settings.get("auto_update_enabled", False):
+        return
+
+    # Respect scope: skip firmware updates in project-only mode
+    scope = settings.get("auto_update_scope", "firmware")
+    if scope == "project":
         return
 
     queue: UpdateQueue = hass.data[DOMAIN]["queue"]
@@ -1364,6 +1508,12 @@ async def _check_and_start_auto_update(hass: HomeAssistant) -> None:
             continue
         if device_id and device_id in excluded_devices:
             continue
+
+        # Project-only bumps must always go via the project flow (force install),
+        # never via the firmware-OTA flow — regardless of scope.
+        if d.get("project_bump_only"):
+            continue
+
         if (
             entity_id
             and d["update_available"]
@@ -1580,7 +1730,6 @@ async def async_handle_force_install(hass: HomeAssistant, call: ServiceCall) -> 
     except RuntimeError as err:
         raise HomeAssistantError(str(err)) from err
 
-
 # ── Supervisor / Add-on helpers ────────────────────────────────────
 
 async def _supervisor_api(hass: HomeAssistant, method: str, path: str) -> dict | None:
@@ -1718,6 +1867,23 @@ def _format_display_version(sw_version_raw: str | None, esphome_version: str | N
     if match:
         return f"{esphome_version} ({match.group(1)})"
     return esphome_version
+
+
+def _strip_sw_version_timestamp(version: str | None) -> str | None:
+    """Strip compile timestamp from sw_version, keep ESPHome project format intact.
+
+    - "2026.4.4 (2026-05-05 11:46:10 +0200)" → "2026.4.4"
+    - "2.28 (ESPHome 2025.12.0)"             → "2.28 (ESPHome 2025.12.0)"
+    - "2026.4.5"                             → "2026.4.5"
+    """
+    if not version:
+        return version
+    v = str(version)
+    # Keep the project format
+    if "ESPHome" in v:
+        return v
+    # Strip "(YYYY-MM-DD HH:MM:SS ±ZZZZ)" timestamp
+    return re.sub(r"\s*\(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}[^)]*\)\s*$", "", v).strip()
 
 
 def _get_local_esphome_builder_version(hass: HomeAssistant) -> str | None:
@@ -2453,6 +2619,54 @@ def _get_esphome_update_entities(hass: HomeAssistant) -> list[dict[str, Any]]:
         if store:
             hass.async_create_task(store.async_save(settings))
 
+    # Apply project version cache: if integration has seen a yaml project bump
+    # that hasn't been installed yet, surface it in the frontend.
+    pv_cache = hass.data[DOMAIN].get("project_version_cache", {})
+    if pv_cache:
+        stale_ids = []
+        for d in devices:
+            did = d.get("device_id")
+            if not did or did not in pv_cache:
+                continue
+            sw_raw = d.get("sw_version_raw")
+            if not sw_raw:
+                continue
+            yaml_v = pv_cache[did]
+            # Self-validate: is the device still actually behind?
+            match = re.match(r'^([\d.]+)\s*\(ESPHome', str(sw_raw))
+            if match:
+                device_pv = match.group(1)
+                try:
+                    if parse_version(device_pv) >= parse_version(yaml_v):
+                        stale_ids.append(did)
+                        continue
+                except Exception:
+                    pass
+
+            # Prefer the ESPHome version from an already-detected firmware update.
+            # Falls back to the device's current ESPHome version if there is no
+            # pending firmware update.
+            existing_latest = d.get("latest_version")
+            esphome_v = (
+                _extract_esphome_version(existing_latest)
+                if existing_latest else None
+            ) or _extract_esphome_version(sw_raw)
+            if not esphome_v:
+                continue
+
+            had_firmware_update = d.get("update_available", False)
+            d["latest_version"] = f"{esphome_v} ({yaml_v})"
+            d["project_bump_pending"] = True
+            d["project_bump_only"] = not had_firmware_update
+            # If only the project version was pending (no firmware update),
+            # surface it as updatable so the frontend shows an action button.
+            if not had_firmware_update:
+                d["update_available"] = True
+        if stale_ids:
+            for sid in stale_ids:
+                pv_cache.pop(sid, None)
+            hass.bus.async_fire("esphome_update_manager_devices_updated")
+
     devices.sort(key=lambda d: (d["name"] or "").lower())
     # Trigger background yaml cache refresh for cache misses
     if pending_yaml_checks:
@@ -2844,6 +3058,7 @@ def ws_get_auto_update_settings(hass, connection, msg):
     connection.send_result(msg["id"], {
         "auto_update_enabled": settings.get("auto_update_enabled", False),
         "stop_addon_during_update": settings.get("stop_addon_during_update", True),
+        "auto_update_scope": settings.get("auto_update_scope", "firmware"),
     })
 
 
@@ -2852,6 +3067,7 @@ def ws_get_auto_update_settings(hass, connection, msg):
         "type": "esphome_update_manager/set_auto_update_settings",
         vol.Optional("auto_update_enabled"): bool,
         vol.Optional("stop_addon_during_update"): bool,
+        vol.Optional("auto_update_scope"): vol.In(["firmware", "project", "both"]),
     }
 )
 @websocket_api.async_response
@@ -2859,34 +3075,82 @@ async def ws_set_auto_update_settings(hass, connection, msg):
     """Set auto-update settings."""
     settings = hass.data[DOMAIN].get("settings", {})
     store: Store = hass.data[DOMAIN]["store"]
-    
-    # Track if auto_update_enabled changed
-    auto_update_changed = False
+
+    # Track changes
     old_auto_update = settings.get("auto_update_enabled", False)
-    
-    # Update settings
+    old_scope = settings.get("auto_update_scope", "firmware")
+    auto_update_changed = False
+    scope_changed = False
+
     if "auto_update_enabled" in msg:
         if msg["auto_update_enabled"] != old_auto_update:
             auto_update_changed = True
         settings["auto_update_enabled"] = msg["auto_update_enabled"]
     if "stop_addon_during_update" in msg:
         settings["stop_addon_during_update"] = msg["stop_addon_during_update"]
-    
+    if "auto_update_scope" in msg:
+        if msg["auto_update_scope"] != old_scope:
+            scope_changed = True
+        settings["auto_update_scope"] = msg["auto_update_scope"]
+
     hass.data[DOMAIN]["settings"] = settings
-    
-    # Save to storage
     await store.async_save(settings)
-    
-    # Only setup/remove listener and check for updates if auto_update_enabled changed
+
+    # Setup/teardown listener when auto_update_enabled flipped
     if auto_update_changed:
         if settings.get("auto_update_enabled", False):
             await _setup_auto_update_listener(hass)
-            # Also check immediately for any pending updates
-            await _check_and_start_auto_update(hass)
         else:
             await _remove_auto_update_listener(hass)
-    
+
+    # Project version cache should always reflect reality, regardless of settings.
+    # Re-check on any settings change so cache is fresh.
+    if auto_update_changed or scope_changed:
+        await _check_all_devices_project_version(hass)
+
+        # Firmware auto-update kick when applicable
+        if settings.get("auto_update_enabled", False):
+            new_scope = settings.get("auto_update_scope", "firmware")
+            if new_scope in ("firmware", "both"):
+                await _check_and_start_auto_update(hass)
+
     connection.send_result(msg["id"], {"saved": True})
+
+
+@websocket_api.websocket_command({"type": "esphome_update_manager/refresh_project_versions"})
+@websocket_api.async_response
+async def ws_refresh_project_versions(hass, connection, msg):
+    """Manual refresh: dashboards + project versions + pending + auto-update kick."""
+    # Force local dashboard refresh (picks up new yaml files / version)
+    local_coordinator = hass.data[DOMAIN].get("local_dashboard")
+    if local_coordinator:
+        try:
+            await local_coordinator.async_request_refresh()
+        except Exception as err:
+            _LOGGER.debug("Local dashboard refresh failed during manual refresh: %s", err)
+
+    # Force external dashboard refresh (deployed versions, device list, etc.)
+    external_coordinator = hass.data[DOMAIN].get("external_dashboard")
+    if external_coordinator:
+        try:
+            await external_coordinator.async_request_refresh()
+        except Exception as err:
+            _LOGGER.debug("External dashboard refresh failed during manual refresh: %s", err)
+
+    # Re-check project versions for all devices (fills cache)
+    await _check_all_devices_project_version(hass)
+
+    # Re-evaluate any pending force installs
+    await _check_pending_force_installs(hass)
+
+    # Kick auto-update for newly-detected firmware updates (skipped internally
+    # if auto-update is disabled or scope is project-only)
+    await _check_and_start_auto_update(hass)
+
+    # Notify frontend so device list re-renders
+    hass.bus.async_fire("esphome_update_manager_devices_updated")
+
+    connection.send_result(msg["id"], {"triggered": True})
 
 
 @websocket_api.websocket_command({"type": "esphome_update_manager/get_update_log"})
@@ -3098,7 +3362,11 @@ async def ws_set_excluded_devices(hass, connection, msg):
 
     # If auto-update is enabled, trigger a check (devices may have been un-excluded)
     if settings.get("auto_update_enabled", False):
-        hass.async_create_task(_check_and_start_auto_update(hass))
+        scope = settings.get("auto_update_scope", "firmware")
+        if scope in ("firmware", "both"):
+            hass.async_create_task(_check_and_start_auto_update(hass))
+        if scope in ("project", "both"):
+            hass.async_create_task(_check_all_devices_project_version(hass))
         
     hass.bus.async_fire("esphome_update_manager_devices_updated")
     _LOGGER.info("Excluded devices list updated: %d device(s)", len(new_excluded))
