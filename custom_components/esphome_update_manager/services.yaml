@@ -32,3 +32,11 @@ force_install:
         device:
           multiple: true
           integration: esphome
+
+refresh_project_versions:
+  name: Refresh Project Versions
+  description: >-
+    Re-check the YAML configuration of all online devices for project version
+    bumps. If auto-update is enabled with scope "project" or "both", any detected
+    bumps will be queued for force install automatically. Equivalent to clicking
+    the refresh button in the panel.
