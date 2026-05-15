@@ -1513,7 +1513,12 @@ class ESPHomeUpdatePanel extends LitElement {
       .btn-exclude-confirm:disabled { background: #666; }
 
       .btn-icon-only { padding: 6px 10px; min-width: auto; }
-      .btn-cancel { background: #f44336; color: white; }
+      .btn-cancel {
+        background: #f44336;
+        color: white;
+        padding-top: 6px;
+        padding-bottom: 5px;
+      }
       .btn-cancel:hover:not(:disabled) { background: #c62828; }
       .btn-cancel:disabled { opacity: 0.7; cursor: not-allowed; }
       .btn-cancel-mode { background: #666; color: #eee; min-width: 45px; justify-content: center; font-size: 0.9em; font-weight: 600; }
