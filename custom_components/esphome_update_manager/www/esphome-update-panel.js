@@ -41,6 +41,7 @@ class ESPHomeUpdatePanel extends LitElement {
       _updateMode: { type: Boolean },
       _excludeMode: { type: Boolean },
       _excludedIds: { type: Object },
+      _autoUpdateScope: { type: String },
       cardMode: { type: Boolean },
       cardConfig: { type: Object },
     };
@@ -74,6 +75,7 @@ class ESPHomeUpdatePanel extends LitElement {
     this._tooltipX = 0;
     this._tooltipY = 0;
     this._showMenu = false;
+    this._refreshingPV = false;
     this._logBackups = [];
     this._isMixedSetup = false;
     this._dashboardAvailable = null;
@@ -87,6 +89,7 @@ class ESPHomeUpdatePanel extends LitElement {
     this._updateMode = false;
     this._excludeMode = false;
     this._excludedIds = new Set();
+    this._autoUpdateScope = localStorage.getItem('esphome_auto_update_scope') || 'firmware';
     this.cardMode = false;
     this.cardConfig = {};
   }
@@ -514,6 +517,9 @@ class ESPHomeUpdatePanel extends LitElement {
       const res = await this.hass.callWS({ type: "esphome_update_manager/get_auto_update_settings" });
       this._autoUpdateEnabled = res.auto_update_enabled || false;
       this._stopAddonDuringUpdate = res.stop_addon_during_update !== false;
+      this._autoUpdateScope = res.auto_update_scope || 'firmware';
+      // Keep localStorage in sync for instant UI on reload
+      localStorage.setItem('esphome_auto_update_scope', this._autoUpdateScope);
       this.requestUpdate();
     } catch (e) {
       console.error("Failed to load auto-update settings", e);
@@ -526,6 +532,7 @@ class ESPHomeUpdatePanel extends LitElement {
         type: "esphome_update_manager/set_auto_update_settings",
         auto_update_enabled: this._autoUpdateEnabled,
         stop_addon_during_update: this._stopAddonDuringUpdate,
+        auto_update_scope: this._autoUpdateScope,
       });
       if (this._autoUpdateEnabled) {
         setTimeout(async () => {
@@ -737,6 +744,34 @@ class ESPHomeUpdatePanel extends LitElement {
     }
   }
 
+  async _installSingleProjectBump(d) {
+    if (!d || !d.device_id) return;
+    const forceInstallDevices = [{
+      entity_id: `force:${d.name}`,
+      device_id: d.device_id,
+      name: d.name,
+      from_version: d.sw_version_raw || d.current_version || null,
+      to_version: null,
+    }];
+    this._forceInstallingIds = new Map(this._forceInstallingIds);
+    this._forceInstallingIds.set(d.entity_id, { startedAt: null, timeoutId: null, isRunning: false });
+    this.requestUpdate();
+    try {
+      await this.hass.callWS({
+        type: "esphome_update_manager/start",
+        entity_ids: forceInstallDevices.map(x => x.entity_id),
+        force_install_devices: forceInstallDevices,
+        stop_addon_slug: this._getStopAddonSlug(),
+      });
+      this.running = true;
+      this._startStatusPolling();
+    } catch (e) {
+      this._forceInstallingIds.delete(d.entity_id);
+      this._forceInstallingIds = new Map(this._forceInstallingIds);
+      throw e;
+    }
+  }
+
   async _startBatchUpdate() {
     if (this.selected.size === 0) {
       this._updateMode = false;
@@ -799,6 +834,24 @@ class ESPHomeUpdatePanel extends LitElement {
       this.requestUpdate();
     } catch (e) {
       alert("Failed to clear results: " + e.message);
+    }
+  }
+
+  async _refreshProjectVersions() {
+    if (this._refreshingPV) return;
+    this._refreshingPV = true;
+    this.requestUpdate();
+    try {
+      await this.hass.callWS({ type: "esphome_update_manager/refresh_project_versions" });
+      setTimeout(() => {
+        this._loadDevices();
+        this._refreshingPV = false;
+        this.requestUpdate();
+      }, 2000);
+    } catch (e) {
+      this._refreshingPV = false;
+      this.requestUpdate();
+      alert("Refresh failed: " + (e?.message || e));
     }
   }
 
@@ -1042,6 +1095,8 @@ class ESPHomeUpdatePanel extends LitElement {
     if (d.enabling) return { label: "Enabling…", cls: "btn-enabling", disabled: true, action: null, spinner: true };
     if (d.firmware_disabled) return { label: "Enable", cls: "btn-enable", disabled: false, action: "enable", spinner: false };
     if (d.firmware_unavailable) return { label: "Unavailable", cls: "btn-unavailable", disabled: true, action: null, spinner: false };
+    if (d.project_bump_pending && d.excluded) return { label: "Excluded", cls: "btn-excluded", disabled: true, action: null, spinner: false };
+    if (d.project_bump_pending) return { label: "Install", cls: "btn-update", disabled: false, action: "install", spinner: false };
     if (d.update_available && d.excluded) return { label: "Excluded", cls: "btn-excluded", disabled: true, action: null, spinner: false };
     if (d.update_available) return { label: "Update", cls: "btn-update", disabled: false, action: "update", spinner: false };
     if (d.skipped) return { label: "Skipped", cls: "btn-skipped", disabled: true, action: null, spinner: false };
@@ -1057,6 +1112,10 @@ class ESPHomeUpdatePanel extends LitElement {
     } else if (btn.action === "update") {
       this._updateSingle(d.entity_id).catch(e => {
         this._addLocalResult(d.entity_id, "failed", "Update failed to start: " + String(e?.message || e));
+      });
+    } else if (btn.action === "install") {
+      this._installSingleProjectBump(d).catch(e => {
+        this._addLocalResult(d.entity_id, "failed", "Install failed to start: " + String(e?.message || e));
       });
     }
   }
@@ -1281,9 +1340,50 @@ class ESPHomeUpdatePanel extends LitElement {
         background: #aaa; border-radius: 8px;
         position: relative;
       }
+      .auto-update-select {
+        -webkit-appearance: none;
+        appearance: none;
+        background: #2a2a2a;
+        color: #ccc;
+        border: 1px solid #2a2a2a;
+        border-radius: 4px;
+        padding: 0 4px;
+        height: 24px;
+        margin: -9px -6px;
+        line-height: 24px;
+        font-size: 1em;
+        font-family: inherit;
+        cursor: pointer;
+        flex-shrink: 0;
+      }
+      .auto-update-select:hover:not(:disabled) { color: #fff; }
+      .auto-update-select:focus,
+      .auto-update-select:focus-visible {
+        outline: none;
+        border-color: #2a2a2a;
+      }
+      .refresh-btn {
+        background: transparent;
+        border: none;
+        border-radius: 50%;
+        width: 20px;
+        height: 20px;
+        padding: 0;
+        margin: -9px 0;
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        color: #ccc;
+        transition: background 0.2s, color 0.2s;
+        flex-shrink: 0;
+      }
+      .refresh-btn:disabled { cursor: wait; opacity: 0.7; }
+      .refresh-btn svg { width: 18px; height: 18px; display: block; }
+      .refresh-btn.spinning svg { animation: spin 1s linear infinite; }
+      .refresh-btn:hover:not(:disabled) { color: #fff; }
       .toolbar.force-mode { background: #aaa; }
       .toolbar-info { flex: 1; color: #333; font-size: 0.9em; }
-      .toolbar.force-mode .toolbar-info { color: #fff; }
       .toolbar.header-menu { font-size: 14px; }
       .device-list {
         margin: 0;
@@ -1432,14 +1532,39 @@ class ESPHomeUpdatePanel extends LitElement {
         margin: 8px 0; padding: 8px 24px;
         background: #2a2a2a; border-radius: 8px;
         font-size: 0.9em; color: #ccc;
+        min-width: 0;
+        flex-wrap: nowrap;
+      }
+      .addon-option .addon-name { 
+        color: #ff9800;
+        font-weight: 500; 
+        flex-shrink: 1;
+        min-width: 6ch;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        
+      }
+      .addon-option .addon-status { 
+        margin-left: auto;
+        font-size: 0.85em;
+        flex-shrink: 0;
+        white-space: nowrap;
+      }
+      .addon-option > span:not(.addon-status) {
+        flex: 0 1 auto;
+        min-width: 6ch;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        transform: translateY(0.5px);
       }
       .addon-option input[type="checkbox"] {
         margin: 0;
         width: 14px;
         height: 14px;
+        flex-shrink: 0;
       }
-      .addon-option .addon-name { color: #ff9800; font-weight: 500; }
-      .addon-option .addon-status { margin-left: auto; font-size: 0.85em; }
       .addon-running { color: #4caf50; }
       .addon-stopped { color: #f44336; }
       .addon-stopping { color: #ff9800; }
@@ -1560,6 +1685,13 @@ class ESPHomeUpdatePanel extends LitElement {
       .content.compact .version {
         font-size: 0.75em;
       }
+      .content.compact .refresh-btn {
+        width: 24px;
+        height: 24px;
+        min-height: 24px;
+        padding: 0;
+      }
+      .content.compact .refresh-btn svg { width: 16px; height: 16px; }
       .content.compact .device-summary { 
         font-size: 0.8em;
         height: 16px;
@@ -1591,6 +1723,12 @@ class ESPHomeUpdatePanel extends LitElement {
         height: 13.5px;
       }
       @media (pointer: coarse) {
+        :host([cardmode]) .auto-update-select { transform: translateY(-0.5px); }
+        :host([cardmode]) .content.compact .auto-update-select { 
+          transform: translateY(-1px); 
+          height: 20px;
+          line-height: 20px;
+        }
         button.btn-cancel-mode { font-size: 1.3em; font-weight: 700; }
         .content.compact button.btn-cancel-mode { font-size: 1.2em; font-weight: 700; }
         .excluded-mark { font-size: 25px; }
@@ -1714,7 +1852,28 @@ render() {
                 this._autoUpdateEnabled = e.target.checked;
                 this._saveAutoUpdateSettings();
               }} />
-            <span>Automatically start updates when available</span>
+            <span>Auto install:</span>
+            <select class="auto-update-select"
+              .value=${this._autoUpdateScope}
+              @change=${(e) => {
+                this._autoUpdateScope = e.target.value;
+                localStorage.setItem('esphome_auto_update_scope', e.target.value);
+                this._saveAutoUpdateSettings();
+                this.requestUpdate();
+              }}>
+              <option value="firmware">Firmware only</option>
+              <option value="project">Project only</option>
+              <option value="both">Firmware + Project</option>
+            </select>
+            <button
+              class="refresh-btn ${this._refreshingPV ? 'spinning' : ''}"
+              title="Re-check project versions now"
+              ?disabled=${this._refreshingPV}
+              @click=${this._refreshProjectVersions}>
+              <svg viewBox="0 0 24 24" fill="currentColor">
+                <path d="M17.65 6.35A7.958 7.958 0 0 0 12 4a8 8 0 0 0-8 8 8 8 0 0 0 8 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0 1 12 18a6 6 0 0 1-6-6 6 6 0 0 1 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/>
+              </svg>
+            </button>
             ${this._autoUpdateEnabled
               ? html`<span class="addon-status addon-running">● Enabled</span>`
               : html`<span class="addon-status addon-stopped">● Disabled</span>`
@@ -1808,7 +1967,7 @@ render() {
                 title="Force Install"
                 @click=${this._enterForceInstallMode}>FRC</button>
               <button class="btn-mode-toggle btn-exc"
-                title="Exclude devices from update"
+                title="Exclude devices from auto install"
                 @click=${this._enterExcludeMode}>EXC</button>
               <button class="btn-mode-toggle btn-log-mode"
                 title="View latest log"
@@ -1899,7 +2058,7 @@ render() {
               ?disabled=${this.running}
               @change=${() => this._handleCheckboxChange(d)} />
           ` : d.excluded && !inMode ? html`
-            <span class="excluded-mark" title="Excluded from update">⊘</span>
+            <span class="excluded-mark" title="Excluded from auto install">⊘</span>
           ` : html`
             <input type="checkbox" disabled .checked=${false} />
           `}
@@ -1912,12 +2071,13 @@ render() {
         <span class="version"
           @click=${(e) => {
             e.stopPropagation();
-            const fullText = (d.update_available || d.skipped) && d.latest_version
+            const showArrow = d.latest_version && d.latest_version !== d.current_version;
+            const fullText = showArrow
               ? `${d.current_version || "?"} → ${d.latest_version}`
               : (d.current_version || "?");
             this._showNameTooltip(e, fullText);
           }}>
-          ${d.current_version || "?"}${(d.update_available || d.skipped) && d.latest_version
+          ${d.current_version || "?"}${d.latest_version && d.latest_version !== d.current_version
             ? html` <span class="arrow">→</span> ${d.latest_version}`
             : ""}
         </span>
