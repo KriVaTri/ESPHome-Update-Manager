@@ -24,9 +24,9 @@ A custom Home Assistant integration that provides a dedicated panel and lovelace
     - [Via frontend](#via-frontend)
     - [Pending force install for offline devices](#pending-force-install-for-offline-devices)
     - [Via service](#via-service-esphome-yaml-force-install)
-    - [Project version auto-check](#project-version-auto-check)
-  - [Exclude devices from auto-update](#exclude-devices-from-auto-update)
-  - [Auto-update](#auto-update)
+    - [Project version auto-install](#project-version-auto-install)
+  - [Exclude devices from auto-install](#exclude-devices-from-auto-install)
+  - [Auto-install](#auto-install)
   - [VS Code Server add-on](#vs-code-server-add-on)
   - [Results](#results)
   - [Update log](#update-log)
@@ -46,12 +46,12 @@ A custom Home Assistant integration that provides a dedicated panel and lovelace
 - **Mixed setup support** — Use both local ESPHome add-on and external dashboard simultaneously
 - **Batch updates** — Select multiple devices and update them sequentially with a single click
 - **Individual updates** — Update a single device directly from the panel
-- **Force Install** — Recompile and upload firmware via the ESPHome dashboard, even when no update is available. Also used for project version updates
+- **Force Install** — Recompile and upload via the ESPHome dashboard, even when no update is available. Also used for project version updates
 - **Pending Force Install for offline devices** — Queue offline (e.g. deep sleep) devices for force install; they are automatically installed as soon as they come online
-- **Project version auto-check** — Automatically detects and installs project version updates when a device comes online, HA restarts, or the external dashboard comes online
-- **Auto-update** — Automatically start updates when new firmware becomes available
+- **Auto-install** — automatically start updates when new firmware or a new project version becomes available
+- **Manual refresh** — refresh button and service to re-check project versions, dashboards, and pending devices on demand or from automations
 - **Enable firmware entities** — Disabled firmware update entities can be enabled directly from the panel
-- **Exclude devices from auto-update** — Mark devices to be skipped by auto-update (and bulk firmware updates) while still allowing manual force install
+- **Exclude devices from auto-install** — Mark devices to be skipped by auto-install while still allowing manual force install
 - **Skipped update detection** — Devices with updates skipped via Home Assistant are clearly marked
 - **Smart error handling** — Compile errors, OTA failures, and offline devices are detected and reported immediately
 - **Failure notifications** — Persistent notifications alert you when updates fail, with a link to the update log
@@ -226,7 +226,8 @@ The panel shows all ESPHome devices with:
 
 | Button | Meaning |
 |--------|---------|
-| **Update** (blue) | Update ready to install — click to start |
+| **Update** (blue) | Firmware update ready to install — click to start |
+| **Install** (blue) | Project version bump ready to install — click to start |
 | **Up to date** (green) | Device is on the latest firmware |
 | **Excluded** (purple) | Device is excluded from auto-update and has an update available — manage via the **EXC** button |
 | **Skipped** (purple) | Update was skipped via Home Assistant — clear skip in HA to update |
@@ -329,26 +330,44 @@ actions:
 
 > **Note:** The `device_id` is the Home Assistant device ID, not the entity ID. You can find the device ID in **Settings → Devices & Services → ESPHome → [your device] → ⋮ → Device info → ID**.
 
-#### Project version auto-check
+#### Project version auto-install
 
-The integration automatically checks whether the project version defined in the YAML matches the version installed on the device. If the YAML contains a higher project version, a Force Install is triggered automatically.
+The integration automatically checks whether the project version defined in the YAML matches the version installed on the device. When a higher project version is found in the YAML, the device is shown in the panel with the new version and — depending on your settings — automatically force installed.
+
+**User control via scope dropdown:**
+
+In the Auto install bar you can choose **what** the integration should install automatically:
+
+| Scope | Behavior |
+|-------|----------|
+| **Firmware only** | Only ESPHome firmware updates are installed automatically. Project bumps are still detected and shown in the panel, but require a manual click on **Install**. |
+| **Project only** | Only project version bumps from the YAML are installed automatically. Firmware updates are still detected and shown, but require a manual click on **Update**. |
+| **Firmware + Project** | Both firmware updates and project bumps are installed automatically. |
+
+> **Note:** Detection of project bumps always runs, regardless of the scope. The scope only controls whether the integration **acts** on it automatically. Devices excluded via **EXC** are never installed automatically, but their pending bump is still visible.
 
 **This check runs in the following situations:**
 
 | Trigger | Description |
 |---------|-------------|
-| **Device comes online** | When a device transitions from offline to online, its project version is checked after a 5 second delay |
-| **HA restarts** | 30 seconds after Home Assistant has fully started, all currently online devices are checked |
-| **External dashboard comes online** | When the external dashboard reconnects, all currently online devices are checked |
-
-> **Note:** The project version auto-check runs independently of the Auto-update setting. When a device comes online and a higher project version is detected in the YAML, a Force Install will start automatically regardless of whether Auto-update is enabled or disabled.
+| **Device comes online** | When a device transitions from offline to online, its project version is checked after a short delay |
+| **HA restarts** | A short while after Home Assistant has fully started, all currently online devices are checked |
+| **External dashboard comes online** | When the external dashboard reconnects, all online devices are re-checked |
+| **Auto install settings change** | When you toggle auto install or change the scope, a full re-check runs |
+| **Refresh button** | Click the ↻ refresh button next to the scope dropdown to re-check now |
+| **Refresh service** | Call `esphome_update_manager.refresh_project_versions` from an automation |
 
 **How it works:**
 1. The integration reads the `sw_version` from the HA device registry (e.g., `1.0.2 (ESPHome 2026.3.1)`)
 2. It fetches the YAML config from the ESPHome dashboard and reads the `project.version` field
-3. If the YAML version is higher than the installed version, a Force Install is queued
-4. Multiple devices detected at the same time are grouped and started as a single batch (15 second debounce)
-5. If the update queue is already running, the Force Install is retried every 60 seconds until the queue is finished
+3. If the YAML version is higher than the installed version, the bump is cached and shown in the panel
+4. If auto install is enabled with a scope that includes project bumps, a Force Install is queued automatically
+5. Multiple devices detected at the same time are grouped and started as a single batch (~15 second debounce)
+6. If the update queue is already running, the Force Install is retried until the queue is free
+
+**Online vs offline devices:**
+- **Online devices** with a project bump are installed automatically (if scope allows it) or can be installed manually via the **Install** button
+- **Offline devices** with a project bump are shown in the panel with their new version visible — they are not auto-installed until they come back online
 
 **Requirements for project version check:**
 - The device YAML must contain a `project` block with a `version` field:
@@ -363,9 +382,9 @@ The integration automatically checks whether the project version defined in the 
 - The device must have a `binary_sensor` status entity (see [Recommendations](#recommendations))
 - The ESPHome dashboard (local or external) must be accessible
 
-### Exclude devices from auto-update
+### Exclude devices from auto-install
 
-Sometimes you want certain devices to **not** be updated automatically — for example a critical device that you only want to update manually after testing, or a device with an unstable firmware version where you want to wait for the next release.
+Sometimes you want certain devices to **not** be installed automatically — for example a critical device that you only want to update manually after testing, or a device with an unstable firmware/project version where you want to wait.
 
 **How it works:**
 
@@ -375,35 +394,37 @@ Sometimes you want certain devices to **not** be updated automatically — for e
 4. Click **▶ Save Excluded (n)** to apply
 
 **Effects of excluding a device:**
-- The device is shown with a purple **Excluded** button instead of the usual **Update** button when an update is available
+- The device is shown with a purple **Excluded** button instead of the usual **Update** or **Install** button when something is available
 - The device is **not** selectable in Firmware Update mode (UPD)
-- **Auto-update** skips the device, even if an update is available
-- **Force Install (FRC)** still works — exclude only applies to firmware updates, not to manual or service-triggered force installs
-- **Project version auto-check** still works — exclude does not affect force installs
+- **Auto install** skips the device for both firmware updates **and** project version bumps, even when the scope includes them
+- The pending project bump is still detected and visible in the panel (with the new version shown), so you can decide to install it manually
+- **Force Install (FRC)** still works — exclude only applies to automatic installs, not to manual or service-triggered force installs
 
-**Up-to-date excluded devices** show the regular **Up to date** button — the **Excluded** indication is only visible when an update is available, since that is when the exclusion actually has an effect.
+**Up-to-date excluded devices** show the regular **Up to date** button — the **Excluded** indication is only visible when an update or project bump is available, since that is when the exclusion actually has an effect.
 
-When you remove devices from the exclude list and confirm with **▶ Save Excluded**, the integration immediately checks whether any newly un-excluded devices now have updates available, and triggers auto-update for them if auto-update is enabled.
+When you remove devices from the exclude list and confirm with **▶ Save Excluded**, the integration immediately re-evaluates auto install for the newly un-excluded devices — both firmware updates and project bumps are queued if applicable (and the scope allows it).
 
-### Auto-update
+### Auto install
 
-A checkbox enables automatic updates:
+The Auto install bar contains:
 
-> ☑️ Automatically start updates when available — ● Enabled / ● Disabled
+> ☑️ **Auto install:** [Firmware only ▾] ↻  ● Enabled / ● Disabled
 
-- When enabled, the integration monitors all ESPHome device update entities
-- When a device's firmware state changes to "update available" (e.g., after coming online or after ESPHome is updated), the update starts automatically
-- Auto-updates respect the "Stop VS Code Server" setting
-- The setting persists across Home Assistant restarts
+- **Checkbox** — enables or disables automatic installation
+- **Scope dropdown** — controls what is installed automatically: `Firmware only`, `Project only`, or `Firmware + Project` (see [Project version auto-install](#project-version-auto-install))
+- **Refresh button (↻)** — immediately re-checks project versions, dashboards, and pending force installs without waiting for the next poll cycle
 
-**Note:** Auto-update triggers when a device transitions to having an update available. This happens when:
-- The auto-update option is enabled and devices have pending updates
-- A device comes online and has a pending update
-- ESPHome is updated and devices now have newer firmware available
-- Home Assistant restarts and devices have pending updates
-- An external dashboard comes online and devices have pending updates
+When enabled, the integration monitors all ESPHome device update entities and project version bumps according to the selected scope. Installs start automatically on:
 
-**Note:** Excluded devices (see [Exclude devices from auto-update](#exclude-devices-from-auto-update)) are always skipped by auto-update, even when they have an update available.
+- A device that comes online with a pending update or project bump
+- ESPHome being updated (new firmware available)
+- Home Assistant restarting with pending updates
+- An external dashboard coming online with pending updates
+- Settings changes (enabling auto install or changing scope re-evaluates all devices)
+
+The "Stop VS Code Server" setting is respected for every auto install.
+
+> **Note:** Excluded devices (see [Exclude devices from auto-install](#exclude-devices-from-auto-update)) are always skipped by auto install, even when they have an update available.
 
 ### Service: Start Updates
 
@@ -430,6 +451,32 @@ conditions: []
 actions:
   - action: esphome_update_manager.start_updates
     data: {}
+mode: single
+```
+
+### Service: Refresh project versions
+
+Manually re-checks all ESPHome devices for project version bumps and refreshes the dashboard state. Useful for periodic automations.
+
+**Service:** `esphome_update_manager.refresh_project_versions`
+
+No parameters.
+
+**Behavior:**
+- Refreshes local and external dashboard data
+- Re-checks all ESPHome devices for project version bumps
+- Re-evaluates the pending force install list
+- Kicks off auto install for any newly detected updates (if auto install is enabled)
+
+**Example automation — re-check project versions every hour:**
+
+```yaml
+alias: ESPHome refresh project versions
+triggers:
+  - trigger: time_pattern
+    hours: "/1"
+actions:
+  - action: esphome_update_manager.refresh_project_versions
 mode: single
 ```
 
@@ -625,15 +672,15 @@ The integration handles various failure scenarios gracefully:
 
 ### Update ready to install
 
-<img width="500" height="552" alt="update-1" src="https://github.com/user-attachments/assets/bdea40cd-de0e-4985-b084-c0fc3f241db1" />
+<img width="500" height="552" alt="update-1" src="https://github.com/user-attachments/assets/4401141c-7685-4ea4-a3ca-fad6c58a1262" />
 
 ### Update in progress
 
-<img width="500" height="552" alt="update-2" src="https://github.com/user-attachments/assets/aac1287d-f524-46ce-9ee1-0b6717d33010" />
+<img width="500" height="552" alt="update-2" src="https://github.com/user-attachments/assets/2d7c27c7-7ac8-422d-8186-a52c8a85a597" />
 
 ### Update successful
 
-<img width="500" height="552" alt="update-5" src="https://github.com/user-attachments/assets/6cea9c92-182e-4e59-b48c-95106ea5a9c8" />
+<img width="500" height="552" alt="update-5" src="https://github.com/user-attachments/assets/3a2342a2-8652-4dbe-a56c-37cbd829a17d" />
 
 ## Troubleshooting
 
@@ -672,16 +719,19 @@ The integration handles various failure scenarios gracefully:
 - Enable the "Stop VS Code Server during updates" option
 - Consider stopping other memory-heavy add-ons manually
 
-### Auto-update does not trigger
+### Auto-install does not trigger
 - Ensure the "Automatically start updates when available" checkbox is enabled
 - Check that your devices have the `binary_sensor.status` entity (see [Recommendations](#recommendations))
 - Auto-update only triggers on state transitions (e.g., device coming online), not when already in "update available" state
 - Check Home Assistant logs for `esphome_update_manager` entries
 
-### Project version auto-check does not trigger
+### Project version auto-install does not trigger
 - Ensure the device YAML contains a `project` block with a `version` field
 - Ensure the device has a `binary_sensor.status` entity (see [Recommendations](#recommendations))
+- Check that the auto install scope includes project bumps (`Project only` or `Firmware + Project`)
+- Check that the device is not excluded (see [Exclude devices from auto-install](#exclude-devices-from-auto-update))
 - Check that the ESPHome dashboard is accessible
+- Try clicking the ↻ refresh button next to the scope dropdown
 - Check Home Assistant logs for `esphome_update_manager` entries
 
 ### Force Install fails
