@@ -241,6 +241,7 @@ class ExternalDashboardCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         try:
             async with self._session.ws_connect(
                 ws_url,
+                headers=headers,
             ) as ws:
                 # Send the command with the required "type" field
                 if command == "compile":
