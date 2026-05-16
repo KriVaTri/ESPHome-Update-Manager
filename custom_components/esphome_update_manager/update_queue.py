@@ -488,8 +488,19 @@ class UpdateQueue:
         from . import _build_to_version, _get_local_esphome_builder_version, _get_external_dashboard_version
         if coordinator == external_coordinator:
             builder_version = _get_external_dashboard_version(self.hass)
+            if not builder_version:
+                builder_version = _get_local_esphome_builder_version(self.hass)
         else:
             builder_version = _get_local_esphome_builder_version(self.hass)
+            if not builder_version:
+                builder_version = _get_external_dashboard_version(self.hass)
+
+        if not builder_version:
+            _LOGGER.warning(
+                "Could not determine builder ESPHome version for force install of %s — "
+                "to_version will be left empty",
+                display_name,
+            )
 
         yaml_project_version = None
         try:
