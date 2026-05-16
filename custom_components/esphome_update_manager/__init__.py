@@ -1785,21 +1785,20 @@ async def async_start_addon(hass: HomeAssistant, slug: str) -> bool:
 # ── Version / device helpers ──────────────────────────────────────
 
 def _parse_version(version_string: str | None) -> str | None:
-    """Extract ESPHome version from a version string."""
+    """Extract ESPHome version from a version string (including suffix)."""
     if not version_string:
         return None
     
     version_string = version_string.strip()
     
     # Check for project version format: "X.XX (ESPHome YYYY.MM.N)"
-    # Extract ESPHome version from inside parentheses
     if "(ESPHome" in version_string:
-        match = re.search(r"\(ESPHome\s+(20\d{2}\.\d+\.\d+)", version_string)
+        match = re.search(r"\(ESPHome\s+(20\d{2}\.\d+\.\d+(?:-dev|b\d+|rc\d+|a\d+)?)", version_string)
         if match:
             return match.group(1)
     
-    # Standard ESPHome version: 20XX.X.X
-    match = re.match(r"(20\d{2}\.\d+\.\d+)", version_string)
+    # Standard ESPHome version: 20XX.X.X with optional suffix
+    match = re.match(r"(20\d{2}\.\d+\.\d+(?:-dev|b\d+|rc\d+|a\d+)?)", version_string)
     if match:
         return match.group(1)
     
@@ -1809,8 +1808,12 @@ def _parse_version(version_string: str | None) -> str | None:
 def _version_tuple(version: str | None) -> tuple[int, ...] | None:
     if not version:
         return None
+    # Strip pre-release suffix for comparison (e.g. "2026.5.0-dev" -> "2026.5.0")
+    base = re.match(r"(\d+(?:\.\d+)*)", str(version))
+    if not base:
+        return None
     try:
-        return tuple(int(x) for x in version.split("."))
+        return tuple(int(x) for x in base.group(1).split("."))
     except (ValueError, AttributeError):
         return None
 
@@ -1838,16 +1841,18 @@ def _is_esphome_version(version: str | None) -> bool:
 
 
 def _extract_esphome_version(version: str | None) -> str | None:
-    """Extract ESPHome version (YYYY.M.x format) from a version string.
+    """Extract ESPHome version (YYYY.M.x format with optional suffix) from a version string.
     
     Examples:
-        "2026.3.3" -> "2026.3.3"
-        "1.0.5 (ESPHome 2026.3.3)" -> "2026.3.3"
-        "1.0.5" -> None
+        "2026.3.3"                          -> "2026.3.3"
+        "2026.5.0-dev"                      -> "2026.5.0-dev"
+        "2026.5.0b2"                        -> "2026.5.0b2"
+        "1.0.5 (ESPHome 2026.3.3)"          -> "2026.3.3"
+        "1.0.5"                             -> None
     """
     if not version:
         return None
-    match = re.search(r"(20\d{2}\.\d+\.\d+)", version)
+    match = re.search(r"(20\d{2}\.\d+\.\d+(?:-dev|b\d+|rc\d+|a\d+)?)", version)
     if match:
         return match.group(1)
     return None
