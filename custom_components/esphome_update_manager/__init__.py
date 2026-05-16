@@ -386,6 +386,32 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         settings["failed_devices"] = failed_devices
         store: Store = hass.data[DOMAIN]["store"]
         await store.async_save(settings)
+
+        # Clear caches and remember recently successful updates.
+        pv_cache = hass.data[DOMAIN].get("project_version_cache", {})
+        pending_project = hass.data[DOMAIN].get("pending_project_installs", {})
+        pending_force = settings.get("pending_force_installs", {})
+        pending_force_changed = False
+        recent_updates = hass.data[DOMAIN].setdefault("recent_successful_updates", {})
+
+        for r in results:
+            if r.get("status") != "success":
+                continue
+            did = r.get("device_id")
+            if not did:
+                continue
+            recent_updates[did] = datetime.now()
+            if pv_cache.pop(did, None) is not None:
+                _LOGGER.debug("Cleared project version cache for %s after successful update", did)
+            if pending_project.pop(did, None) is not None:
+                _LOGGER.debug("Cleared pending project install for %s after successful update", did)
+            if pending_force.pop(did, None) is not None:
+                pending_force_changed = True
+                _LOGGER.debug("Cleared pending force install for %s after successful update", did)
+
+        if pending_force_changed:
+            settings["pending_force_installs"] = pending_force
+            await store.async_save(settings)
         
         # Only process if at least one update was attempted (not just queued/cancelled)
         attempted_statuses = {"success", "failed", "skipped"}
@@ -567,6 +593,8 @@ async def _setup_always_on_status_listener(hass: HomeAssistant) -> None:
             await asyncio.sleep(5)
             await _check_project_version_update(hass, entity_id)
             await _check_pending_force_installs(hass)
+            # Also kick auto-update (skipped internally if disabled/wrong scope)
+            await _check_and_start_auto_update(hass)
 
         hass.async_create_task(_delayed_check())
 
@@ -946,6 +974,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data[DOMAIN].pop("pending_force_install_retry", None)
     hass.data[DOMAIN].pop("project_version_cache", None)
     hass.data[DOMAIN].pop("project_version_check_running", None)
+    hass.data[DOMAIN].pop("recent_successful_updates", None)
+    hass.data[DOMAIN].pop("_yaml_pv_cache", None)
     return True
 
 
@@ -1059,41 +1089,6 @@ async def _setup_auto_update_listener(hass: HomeAssistant) -> None:
         
         hass.async_create_task(_delayed_auto_update())
 
-    @callback
-    def _handle_status_state_change(event: Event) -> None:
-        """Handle state change of device status sensors (for deep sleep devices)."""
-        entity_id = event.data.get("entity_id")
-        new_state = event.data.get("new_state")
-        old_state = event.data.get("old_state")
-
-        if new_state is None:
-            return
-
-        # Only trigger when device comes online (status becomes "on")
-        if new_state.state != "on":
-            return
-
-        # Skip if it was already "on"
-        if old_state is not None and old_state.state == "on":
-            return
-
-        old_state_str = old_state.state if old_state else "None"
-        _LOGGER.debug(
-            "ESPHome device came online: %s (state: %s -> %s), checking for updates in 5 seconds",
-            entity_id,
-            old_state_str,
-            new_state.state,
-        )
-
-        async def _delayed_check():
-            await asyncio.sleep(5)
-            # First check project version update
-            await _check_project_version_update(hass, entity_id)
-            # Then check normal auto-update
-            await _check_and_start_auto_update(hass)
-
-        hass.async_create_task(_delayed_check())
-
     ent_reg = er.async_get(hass)
     
     # Get all update entity IDs
@@ -1130,15 +1125,6 @@ async def _setup_auto_update_listener(hass: HomeAssistant) -> None:
         )
         hass.data[DOMAIN]["unsubscribe_listeners"].append(unsub_updates)
 
-    # Subscribe to state changes for status sensors (deep sleep devices)
-    if all_status_entity_ids:
-        unsub_status = async_track_state_change_event(
-            hass,
-            all_status_entity_ids,
-            _handle_status_state_change,
-        )
-        hass.data[DOMAIN]["unsubscribe_listeners"].append(unsub_status)
-    
     # Log which entities we're monitoring
     esphome_update_entities = [eid for eid in all_update_entity_ids if _is_esphome_update_entity(hass, eid)]
     _LOGGER.debug(
@@ -1182,13 +1168,31 @@ async def _check_project_version_update(hass: HomeAssistant, entity_id: str) -> 
     # NOTE: excluded check moved below — we still want to cache the bump
     # so the frontend can show it. Excluded only prevents the auto force install.
 
-    # Skip if device was recently successfully updated — also clear stale cache
+    # Skip if device was successfully updated very recently — the device
+    # registry's sw_version may lag behind for a minute or two after OTA
+    # reboot, which would cause a spurious re-queue of a force install.
+    recent_updates = hass.data[DOMAIN].get("recent_successful_updates", {})
+    last_success = recent_updates.get(entity.device_id)
+    if last_success and (datetime.now() - last_success).total_seconds() < 120:
+        _LOGGER.debug(
+            "%s: recently successfully updated (%ds ago), skipping project version check",
+            display_name,
+            int((datetime.now() - last_success).total_seconds()),
+        )
+        cache = hass.data[DOMAIN].get("project_version_cache", {})
+        if cache.pop(entity.device_id, None) is not None:
+            hass.bus.async_fire("esphome_update_manager_devices_updated")
+        return
+
+    # Also skip if there's a current successful result in the queue
+    # (covers the rare case where recent_successful_updates was cleared
+    # but the queue still holds the result)
     queue = hass.data[DOMAIN].get("queue")
     if queue:
         for result in queue.results:
             if result.get("device_id") == entity.device_id and result.get("status") == "success":
                 _LOGGER.debug(
-                    "%s: Recently successfully updated, skipping project version check",
+                    "%s: queue still shows recent success, skipping project version check",
                     display_name
                 )
                 cache = hass.data[DOMAIN].get("project_version_cache", {})
@@ -1245,6 +1249,10 @@ async def _check_project_version_update(hass: HomeAssistant, entity_id: str) -> 
 
     project = config.get("esphome", {}).get("project", {})
     yaml_version = project.get("version")
+
+    # Populate shared yaml-pv cache so _get_yaml_project_version doesn't re-fetch
+    yaml_cache = hass.data[DOMAIN].setdefault("_yaml_pv_cache", {})
+    yaml_cache[entity.device_id] = (datetime.now(), yaml_version)
 
     if not yaml_version:
         _LOGGER.debug("%s: No project version in yaml, skipping", display_name)
@@ -2892,11 +2900,21 @@ def ws_get_devices(hass, connection, msg):
 
 
 async def _get_yaml_project_version(hass: HomeAssistant, device: dict) -> str | None:
-    """Get project version from yaml config."""
+    """Get project version from yaml config (cached for 30s)."""
     dev_reg = dr.async_get(hass)
     device_entry = dev_reg.async_get(device.get("device_id")) if device.get("device_id") else None
     if not device_entry:
         return None
+
+    # Cache check (30s TTL) — avoids duplicate yaml fetches when this
+    # is called shortly after _check_project_version_update.
+    cache = hass.data[DOMAIN].setdefault("_yaml_pv_cache", {})
+    cache_key = device_entry.id
+    cached = cache.get(cache_key)
+    if cached:
+        ts, val = cached
+        if (datetime.now() - ts).total_seconds() < 30:
+            return val
 
     original_name = device_entry.name
     local_coordinator = hass.data[DOMAIN].get("local_dashboard")
@@ -2928,7 +2946,9 @@ async def _get_yaml_project_version(hass: HomeAssistant, device: dict) -> str | 
     try:
         config = await coordinator.async_get_config(configuration)
         if config:
-            return config.get("esphome", {}).get("project", {}).get("version")
+            version = config.get("esphome", {}).get("project", {}).get("version")
+            cache[cache_key] = (datetime.now(), version)
+            return version
     except Exception:
         return None
 
