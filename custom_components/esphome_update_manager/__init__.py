@@ -1947,19 +1947,33 @@ def _get_mac_suffix(device: dr.DeviceEntry) -> str | None:
 
 
 def _build_to_version(sw_version_raw: str | None, new_esphome_version: str | None, new_project_version: str | None = None) -> str | None:
-    """Build expected to_version string based on current sw_version format."""
+    """Build expected to_version string based on current sw_version format.
+
+    Returns None if the new ESPHome version is unknown — better to show no
+    to_version in logs than a misleading "X → X" identity line.
+    """
+    # Defensive: strip any extra formatting from new_esphome_version
+    # (in case caller passed a display version like "2026.5.0b1 (2.28)")
+    clean_esphome = _extract_esphome_version(new_esphome_version) or new_esphome_version
+
+    if not clean_esphome:
+        return None
+
     if not sw_version_raw:
-        return new_esphome_version
-    
+        return clean_esphome
+
     # Check if sw_version has project version format: "1.0.1 (ESPHome 2025.12.0)"
-    match = re.match(r'^([\d.]+)\s*\(ESPHome\s+([\d.]+)\)', str(sw_version_raw))
+    # Also accepts pre-release suffixes like "2026.5.0b1", "2026.5.0-dev", "2026.5.0rc1"
+    match = re.match(
+        r'^([\d.]+)\s*\(ESPHome\s+(20\d{2}\.\d+\.\d+(?:-dev|b\d+|rc\d+|a\d+)?)\)',
+        str(sw_version_raw),
+    )
     if match:
         project_v = new_project_version or match.group(1)
-        esphome_v = new_esphome_version or match.group(2)
-        return f"{project_v} (ESPHome {esphome_v})"
-    
-    # No project version → just return new ESPHome version
-    return new_esphome_version or sw_version_raw
+        return f"{project_v} (ESPHome {clean_esphome})"
+
+    # No project version in current → just return clean ESPHome version
+    return clean_esphome
 
 
 def _get_local_config_filename(name: str, mac_suffix: str | None = None) -> str:
@@ -2393,7 +2407,7 @@ def _get_esphome_update_entities(hass: HomeAssistant) -> list[dict[str, Any]]:
                 deployed = external_device_info.get("deployed_version")
                 if deployed:
                     installed = _parse_version(deployed)
-
+                
             # Skip non-ESPHome firmware - check raw version or state attributes
             if not _is_esphome_version(registry_version_raw) and not _is_esphome_version(state.attributes.get("installed_version")):
                 continue
@@ -2494,9 +2508,7 @@ def _get_esphome_update_entities(hass: HomeAssistant) -> list[dict[str, Any]]:
                 is_external_device = True
                 builder_version = external_builder_version
                 is_unavailable = not external_dashboard_available
-                deployed = external_device_info.get("deployed_version")
-                if deployed:
-                    installed = _parse_version(deployed)
+
                 # Remember this device as external - use original name if available
                 remember_name = _normalize_device_name(original_name) if original_name else normalized_name
                 if remember_name not in remembered_external_devices:
@@ -2652,10 +2664,16 @@ def _get_esphome_update_entities(hass: HomeAssistant) -> list[dict[str, Any]]:
             # Falls back to the device's current ESPHome version if there is no
             # pending firmware update.
             existing_latest = d.get("latest_version")
-            esphome_v = (
-                _extract_esphome_version(existing_latest)
-                if existing_latest else None
-            ) or _extract_esphome_version(sw_raw)
+            esphome_v = _extract_esphome_version(existing_latest) if existing_latest else None
+            if not esphome_v:
+                # For external devices, prefer the external builder version
+                # (= what the dashboard will compile against) over the device's
+                # current ESPHome version. Otherwise a project bump on an
+                # outdated device would show "old_esphome (new_project)".
+                if d.get("is_external"):
+                    esphome_v = external_builder_version or _extract_esphome_version(sw_raw)
+                else:
+                    esphome_v = _extract_esphome_version(sw_raw)
             if not esphome_v:
                 continue
 
