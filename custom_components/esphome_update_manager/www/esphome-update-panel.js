@@ -1857,7 +1857,7 @@ render() {
                 this._autoUpdateEnabled = e.target.checked;
                 this._saveAutoUpdateSettings();
               }} />
-            <span>Auto install:</span>
+            <span>Auto install trigger:</span>
             <select class="auto-update-select"
               .value=${this._autoUpdateScope}
               @change=${(e) => {
