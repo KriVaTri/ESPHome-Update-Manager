@@ -408,7 +408,7 @@ When you remove devices from the exclude list and confirm with **▶ Save Exclud
 
 The Auto install bar contains:
 
-> ☑️ **Auto install:** [Firmware only ▾] ↻  ● Enabled / ● Disabled
+> ☑️ **Auto install trigger:** [Firmware only ▾] ↻  ● Enabled / ● Disabled
 
 - **Checkbox** — enables or disables automatic installation
 - **Scope dropdown** — controls what is installed automatically: `Firmware only`, `Project only`, or `Firmware + Project` (see [Project version auto-install](#project-version-auto-install))
