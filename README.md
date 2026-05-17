@@ -66,7 +66,7 @@ A custom Home Assistant integration that provides a dedicated panel and lovelace
 
 - Home Assistant 2024.1 or newer
 - ESPHome integration configured with your devices
-- ESPHome Device Builder (Dashboard) app (add-on) installed and populated with your devices, **or** an external ESPHome dashboard accessible via HTTP
+- ESPHome Device Builder (Dashboard) app (add-on) installed (2021.8.0 or newer) and populated with your devices, **or** an external ESPHome dashboard accessible via HTTP
 
 ## Recommendations
 
