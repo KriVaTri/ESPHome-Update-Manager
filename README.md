@@ -70,7 +70,7 @@ A custom Home Assistant integration that provides a dedicated panel and lovelace
 
 ## Recommendations
 
-- Add the following to the device's YAML for **fast and reliable online status detection**:
+- Although not required, adding the following to the device's YAML gives **fast and reliable online status detection**:
   
   ```yaml
   binary_sensor:
