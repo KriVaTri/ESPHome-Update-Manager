@@ -707,9 +707,6 @@ The integration handles various failure scenarios gracefully:
 - Make sure the integration is added via Settings → Devices & Services
 - Restart Home Assistant and clear your browser cache
 
-### "Overwriting panel" error on reload
-- This is handled automatically — the integration checks if the panel is already registered before creating it
-
 ### VS Code Server checkbox does not appear
 - The add-on must be installed (it does not need to be running)
 - Check Home Assistant logs for Supervisor API errors
@@ -719,9 +716,8 @@ The integration handles various failure scenarios gracefully:
 - Consider stopping other memory-heavy add-ons manually
 
 ### Auto-install does not trigger
-- Ensure the "Automatically start updates when available" checkbox is enabled
-- Check that your devices have the `binary_sensor.status` entity (see [Recommendations](#recommendations))
-- Auto-update only triggers on state transitions (e.g., device coming online), not when already in "update available" state
+- Ensure the "Auto install trigger" checkbox is enabled
+- Auto-install only triggers on state transitions (e.g., device coming online), not when already in "update available" state
 - Check Home Assistant logs for `esphome_update_manager` entries
 
 ### Project version auto-install does not trigger
