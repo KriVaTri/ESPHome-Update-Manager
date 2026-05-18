@@ -705,7 +705,6 @@ The integration handles various failure scenarios gracefully:
 
 ### Panel does not appear in sidebar
 - Make sure the integration is added via Settings → Devices & Services
-- Check that `esphome-update-panel.js` exists in `config/www/esphome-update-manager/`
 - Restart Home Assistant and clear your browser cache
 
 ### "Overwriting panel" error on reload
