@@ -314,7 +314,7 @@ class ExternalDashboardCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 _LOGGER.error("WebSocket handshake failed for %s: %s", command, err)
             return False
         except asyncio.TimeoutError:
-            _LOGGER.error("%s timed out after %d seconds", command, timeout)
+            _LOGGER.error("%s timed out", command)
             return False
         except aiohttp.ClientError as err:
             _LOGGER.error("WebSocket connection failed for %s: %s", command, err)
@@ -576,3 +576,11 @@ class LocalDashboardCoordinator:
         except Exception as err:
             _LOGGER.error("Failed to get config for %s: %s", configuration, err)
             return None
+
+    async def async_request_refresh(self) -> None:
+        """No-op for API compatibility with ExternalDashboardCoordinator.
+        
+        The local dashboard has no device list to refresh — device matching
+        happens via HA's entity/device registry.
+        """
+        return
