@@ -261,6 +261,39 @@ class UpdateQueue:
                     "Finished %s with status: %s", item.entity_id, item.status
                 )
 
+                # Per-device cleanup on success — must happen BEFORE the rest of
+                # the queue finishes, so the frontend stops showing the install
+                # button for this device while other devices are still updating.
+                if item.status == STATUS_SUCCESS and item.device_id:
+                    data = self.hass.data[DOMAIN]
+                    recent = data.setdefault("recent_successful_updates", {})
+                    recent[item.device_id] = datetime.now()
+
+                    # Only pop pv_cache if device is still online — if it has
+                    # rebooted offline, we want to keep showing the bump target
+                    # version in the panel until the device comes back with its
+                    # updated sw_version. _trigger_device_online_checks will
+                    # pop the cache once it confirms device_v >= yaml_v.
+                    from homeassistant.helpers import entity_registry as er
+                    from . import _is_device_online
+                    ent_reg = er.async_get(self.hass)
+                    if _is_device_online(self.hass, ent_reg, item.device_id) is True:
+                        pv_cache = data.get("project_version_cache", {})
+                        pv_cache.pop(item.device_id, None)
+
+                    pending_project = data.get("pending_project_installs", {})
+                    if pending_project:
+                        pending_project.pop(item.device_id, None)
+
+                    settings = data.get("settings", {})
+                    pending_force = settings.get("pending_force_installs", {})
+                    if pending_force.pop(item.device_id, None) is not None:
+                        store = data.get("store")
+                        if store:
+                            self.hass.async_create_task(store.async_save(settings))
+
+                    self.hass.bus.async_fire("esphome_update_manager_devices_updated")
+
                 self.hass.bus.async_fire(
                     "esphome_update_manager_progress",
                     {"results": self.results, "summary": self.summary},
