@@ -379,7 +379,6 @@ In the Auto install bar you can choose **what** the integration should install a
       version: "1.0.3"
   ```
 
-- The device must have a `binary_sensor` status entity (see [Recommendations](#recommendations))
 - The ESPHome dashboard (local or external) must be accessible
 
 ### Exclude devices from auto-install
@@ -546,7 +545,7 @@ The pending force install feature is especially useful for **battery-powered dee
 
 Each deep sleep device must expose:
 
-1. **A status binary sensor** (used by both the integration and the automation to detect when the device is online):
+1. **A status binary sensor** (used by the automation to detect when the device is online):
 
    ```yaml
    binary_sensor:
@@ -722,7 +721,6 @@ The integration handles various failure scenarios gracefully:
 
 ### Project version auto-install does not trigger
 - Ensure the device YAML contains a `project` block with a `version` field
-- Ensure the device has a `binary_sensor.status` entity (see [Recommendations](#recommendations))
 - Check that the auto install scope includes project bumps (`Project only` or `Firmware + Project`)
 - Check that the device is not excluded (see [Exclude devices from auto-install](#exclude-devices-from-auto-update))
 - Check that the ESPHome dashboard is accessible
@@ -736,7 +734,6 @@ The integration handles various failure scenarios gracefully:
 - Check Home Assistant logs for `esphome_update_manager` entries
 
 ### Pending force install does not trigger when the device wakes up
-- Ensure the device has a `binary_sensor: status` entity (see [Recommendations](#recommendations)) — the integration relies on it to detect online transitions reliably
 - Verify the device is still in the pending list (visible as **Pending** in the panel)
 - If the regular update queue is running, pending installs are retried every 60 seconds until the queue is free
 - Check Home Assistant logs for `esphome_update_manager` entries
