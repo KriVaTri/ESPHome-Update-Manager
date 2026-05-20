@@ -214,9 +214,7 @@ class ESPHomeUpdatePanel extends LitElement {
     async _subscribeToDevicesUpdated() {
     try {
       this._devicesUpdatedSubscription = await this.hass.connection.subscribeMessage(
-        () => {
-          if (!this.running) this._loadDevices();
-        },
+        () => this._loadDevices(),
         { type: "esphome_update_manager/subscribe_devices_updated" }
       );
     } catch (e) {
