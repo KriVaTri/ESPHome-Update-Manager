@@ -2256,6 +2256,7 @@ def _find_status_entity(
             return entity.entity_id
     return None
 
+        
 def _is_device_online(
     hass: HomeAssistant,
     ent_reg: er.EntityRegistry,
