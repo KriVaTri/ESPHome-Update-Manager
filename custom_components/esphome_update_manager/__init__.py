@@ -578,9 +578,9 @@ async def _setup_always_on_status_listener(hass: HomeAssistant) -> None:
         if (
             entity.domain == "binary_sensor"
             and entity.platform == "esphome"
-            and entity.entity_id.endswith("_status")
             and entity.disabled_by is None
             and entity.device_id in esphome_device_ids
+            and (entity.device_class or entity.original_device_class) == "connectivity"
         )
     ]
 
@@ -1271,9 +1271,9 @@ async def _setup_auto_update_listener(hass: HomeAssistant) -> None:
         if (
             entity.domain == "binary_sensor"
             and entity.platform == "esphome"
-            and entity.entity_id.endswith("_status")
             and entity.disabled_by is None
             and entity.device_id in esphome_device_ids
+            and (entity.device_class or entity.original_device_class) == "connectivity"
         )
     ]
 
@@ -2250,12 +2250,11 @@ def _find_status_entity(
             entity.device_id == device_id
             and entity.domain == "binary_sensor"
             and entity.platform == "esphome"
-            and entity.entity_id.endswith("_status")
             and entity.disabled_by is None
+            and (entity.device_class or entity.original_device_class) == "connectivity"
         ):
             return entity.entity_id
     return None
-
 
 def _is_device_online(
     hass: HomeAssistant,
