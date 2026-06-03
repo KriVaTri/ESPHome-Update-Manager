@@ -44,6 +44,7 @@ class ESPHomeUpdatePanel extends LitElement {
       _autoUpdateScope: { type: String },
       cardMode: { type: Boolean },
       cardConfig: { type: Object },
+      _operation: { type: String },
     };
   }
 
@@ -92,6 +93,7 @@ class ESPHomeUpdatePanel extends LitElement {
     this._autoUpdateScope = localStorage.getItem('esphome_auto_update_scope') || 'firmware';
     this.cardMode = false;
     this.cardConfig = {};
+    this._operation = "force_install";
   }
 
   connectedCallback() {
@@ -568,6 +570,9 @@ class ESPHomeUpdatePanel extends LitElement {
         if (res.running && !this.running) {
           this.running = true;
           this.results = res.results || [];
+          this._phase = res.phase || "idle";
+          this._operation = res.operation || "force_install";
+          this._addonName = res.addon_name || null;
           this._restoreUpdatingState();
           this._startStatusPolling();
           this._loadDevices();
@@ -593,6 +598,7 @@ class ESPHomeUpdatePanel extends LitElement {
       this.running = res.running;
       this.results = res.results || [];
       this._phase = res.phase || "idle";
+      this._operation = res.operation || "force_install";
       this._addonName = res.addon_name || null;
 
       if (this._updatingIds.size > 0) {
@@ -639,6 +645,7 @@ class ESPHomeUpdatePanel extends LitElement {
         this._clearAllUpdatingTimers();
         this._cancelling = false;
         this._phase = "idle";
+        this._operation = "force_install";
         this._addonName = null;
         this._isForceInstallRun = false;
         this.selected.clear();
@@ -1062,13 +1069,24 @@ class ESPHomeUpdatePanel extends LitElement {
 
   _getStatusText() {
     if (this._cancelling) return "Cancelling…";
-    
-    const isForceInstall = this._isForceInstallRun || this.results.some(r => r.is_force_install);
-    
+
     switch (this._phase) {
       case "stopping_addon": return `Stopping ${this._addonName || "add-on"}…`;
       case "starting_addon": return `Starting ${this._addonName || "add-on"}…`;
+    }
+
+    // Operation-specific status text
+    switch (this._operation) {
+      case "clean":    return "Cleaning build files…";
+      case "compile":  return "Compiling firmware…";
+      case "upload":   return "Uploading firmware (OTA)…";
+      case "force_install":
+        return "Compiling and uploading yaml…";
       default:
+        // Normal firmware-OTA update flow (operation defaults to force_install
+        // server-side, but for regular updates the queue uses force_install too,
+        // so distinguish via results)
+        const isForceInstall = this._isForceInstallRun || this.results.some(r => r.is_force_install);
         return isForceInstall ? "Compiling and uploading yaml…" : "Updating…";
     }
   }
@@ -1085,7 +1103,14 @@ class ESPHomeUpdatePanel extends LitElement {
 
   _getDeviceButton(d) {
     const isForceInstalling = this._forceInstallingIds.has(d.entity_id);
-    if (isForceInstalling) return { label: "Installing…", cls: "btn-updating", disabled: true, action: null, spinner: true };
+    if (isForceInstalling) {
+      // Operation-specific button label when device is being processed
+      let label = "Installing…";
+      if (this._operation === "clean") label = "Cleaning…";
+      else if (this._operation === "compile") label = "Compiling…";
+      else if (this._operation === "upload") label = "Uploading…";
+      return { label, cls: "btn-updating", disabled: true, action: null, spinner: true };
+    }
     if (d.pending_force_install) return { label: "Pending", cls: "btn-offline", disabled: true, action: null, spinner: false };
     const isUpdating = this._isUpdatingPending(d.entity_id) || d.in_progress;
     if (isUpdating) return { label: "Updating…", cls: "btn-updating", disabled: true, action: null, spinner: true };
