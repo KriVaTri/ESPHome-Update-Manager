@@ -358,6 +358,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         """Handle update finished event - write log and send notification if needed."""
         results = event.data.get("results", [])
         summary = event.data.get("summary", {})
+        operation = event.data.get("operation", "force_install")
 
         # Only process if there are actual results
         if not results:
@@ -432,7 +433,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         if not has_attempted:
             return
         
-        await _write_update_log(hass, results)
+        await _write_update_log(hass, results, operation)
         await _backup_log(hass)
         
         # Check for failures
@@ -470,6 +471,45 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         _handle_force_install,
         schema=vol.Schema({
             vol.Required("device_id"): vol.All(cv.ensure_list, [cv.string]),
+        }),
+    )
+
+    # Clean build files service
+    async def _handle_clean_build_files(call: ServiceCall) -> None:
+        await _handle_device_operation(hass, call, "clean")
+
+    hass.services.async_register(
+        DOMAIN,
+        "clean_build_files",
+        _handle_clean_build_files,
+        schema=vol.Schema({
+            vol.Optional("device_id"): vol.All(cv.ensure_list, [cv.string]),
+        }),
+    )
+
+    # Compile only service
+    async def _handle_compile(call: ServiceCall) -> None:
+        await _handle_device_operation(hass, call, "compile")
+
+    hass.services.async_register(
+        DOMAIN,
+        "compile",
+        _handle_compile,
+        schema=vol.Schema({
+            vol.Optional("device_id"): vol.All(cv.ensure_list, [cv.string]),
+        }),
+    )
+
+    # OTA upload only service
+    async def _handle_upload(call: ServiceCall) -> None:
+        await _handle_device_operation(hass, call, "upload")
+
+    hass.services.async_register(
+        DOMAIN,
+        "upload",
+        _handle_upload,
+        schema=vol.Schema({
+            vol.Optional("device_id"): vol.All(cv.ensure_list, [cv.string]),
         }),
     )
 
@@ -885,7 +925,11 @@ def _read_manifest(manifest_path: Path) -> dict:
         return json.load(f)
 
 
-async def _write_update_log(hass: HomeAssistant, results: list[dict]) -> None:
+async def _write_update_log(
+    hass: HomeAssistant,
+    results: list[dict],
+    operation: str = "force_install",
+) -> None:
     """Write update results to log file."""
     log_path = _get_log_path(hass)
     
@@ -905,7 +949,14 @@ async def _write_update_log(hass: HomeAssistant, results: list[dict]) -> None:
         
         lines = []
         lines.append("=" * 60)
-        lines.append(f"ESPHome Update Manager v{version} - Update Log")
+        op_titles = {
+            "clean": "Clean Build Files Log",
+            "compile": "Compile Only Log",
+            "upload": "OTA Upload Only Log",
+            "force_install": "Force Install / Update Log",
+        }
+        op_title = op_titles.get(operation, "Update Log")
+        lines.append(f"ESPHome Update Manager v{version} - {op_title}")
         lines.append(f"Timestamp: {timestamp}")
         lines.append("=" * 60)
         lines.append("")
@@ -949,7 +1000,15 @@ async def _write_update_log(hass: HomeAssistant, results: list[dict]) -> None:
             lines.append(f"{status_icon} {entity_id}")
             lines.append(f"   Status: {status}")
             if r.get("is_force_install"):
-                lines.append(f"   Type: Force Install (compile + OTA)")
+                # Operation-aware label for clean/compile/upload services
+                type_labels = {
+                    "clean": "Clean Build Files",
+                    "compile": "Compile Only (no upload)",
+                    "upload": "OTA Upload Only (no compile)",
+                    "force_install": "Force Install (compile + OTA)",
+                }
+                type_label = type_labels.get(operation, "Force Install (compile + OTA)")
+                lines.append(f"   Type: {type_label}")
             else:
                 lines.append(f"   Type: Firmware Update (OTA)")
             if status == "success" and from_version and to_version:
@@ -1102,6 +1161,9 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.services.async_remove(DOMAIN, "start_updates")
     hass.services.async_remove(DOMAIN, "force_install")
     hass.services.async_remove(DOMAIN, "refresh_project_versions")
+    hass.services.async_remove(DOMAIN, "clean_build_files")
+    hass.services.async_remove(DOMAIN, "compile")
+    hass.services.async_remove(DOMAIN, "upload")
     
     hass.data[DOMAIN].pop("queue", None)
     hass.data[DOMAIN].pop("store", None)
@@ -1815,6 +1877,80 @@ async def async_handle_start_updates(hass: HomeAssistant, call: ServiceCall) -> 
         queue.start(updatable, stop_addon_slug=stop_addon_slug, version_info=version_info)
     except RuntimeError as err:
         _LOGGER.warning("Failed to start updates via service: %s", err)
+
+async def _handle_device_operation(
+    hass: HomeAssistant,
+    call: ServiceCall,
+    operation: str,
+) -> None:
+    """Shared handler for clean_build_files / compile / upload services.
+
+    If no device_id is provided, applies to all ESPHome devices.
+    """
+    device_ids = call.data.get("device_id")
+    dev_reg = dr.async_get(hass)
+
+    if not device_ids:
+        # No device_id → operate on ALL ESPHome devices
+        esphome_device_ids = _get_esphome_device_ids(hass)
+        device_ids = [
+            did for did in esphome_device_ids
+            if (d := dev_reg.async_get(did)) is not None
+            and not _is_esphome_subdevice(hass, d)
+        ]
+    elif isinstance(device_ids, str):
+        device_ids = [device_ids]
+
+    device_ids = list(dict.fromkeys(device_ids))
+
+    devices_list: list[dict] = []
+    for device_id in device_ids:
+        device = dev_reg.async_get(device_id)
+        if not device:
+            continue
+        if _is_esphome_subdevice(hass, device):
+            continue
+        name = device.name_by_user or device.name or device_id
+        devices_list.append({
+            "entity_id": f"{operation}:{_normalize_device_name(name)}",
+            "device_id": device_id,
+            "name": name,
+            "from_version": device.sw_version,
+            "to_version": None,
+        })
+
+    if not devices_list:
+        raise HomeAssistantError(f"No valid devices found for {operation}")
+
+    queue: UpdateQueue = hass.data[DOMAIN]["queue"]
+    if queue.is_running:
+        raise HomeAssistantError(
+            f"Cannot start {operation}: update queue is already running"
+        )
+
+    settings = hass.data[DOMAIN].get("settings", {})
+    stop_addon_slug = None
+    # Only stop the addon for compile/upload (clean is fast and doesn't need it)
+    if operation in ("compile", "upload") and settings.get("stop_addon_during_update", True):
+        addon_info = await async_get_addon_info(hass, VSCODE_ADDON_SLUG)
+        if addon_info and addon_info.get("state") == "started":
+            stop_addon_slug = VSCODE_ADDON_SLUG
+
+    try:
+        queue.start(
+            entity_ids=[d["entity_id"] for d in devices_list],
+            force_install_devices=devices_list,
+            stop_addon_slug=stop_addon_slug,
+            operation=operation,
+        )
+        _LOGGER.info(
+            "Started %s for %d device(s): %s",
+            operation,
+            len(devices_list),
+            [d["name"] for d in devices_list],
+        )
+    except RuntimeError as err:
+        raise HomeAssistantError(str(err)) from err
 
 async def async_handle_force_install(hass: HomeAssistant, call: ServiceCall) -> None:
     """Handle the force_install service call.
@@ -3289,6 +3425,7 @@ def ws_get_status(hass, connection, msg):
             "summary": queue.summary,
             "phase": queue.phase,
             "addon_name": queue.addon_name,
+            "operation": queue.operation,
         },
     )
 
