@@ -218,6 +218,13 @@ class ExternalDashboardCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         return await self._run_websocket_command("upload", configuration, port=port)
 
+    async def async_clean(self, configuration: str) -> bool:
+        """Clean build files for a device via WebSocket."""
+        if not self._available:
+            _LOGGER.error("Cannot clean: dashboard not available")
+            return False
+        return await self._run_websocket_command("clean", configuration)
+
     async def _run_websocket_command(
         self,
         command: str,
@@ -541,6 +548,35 @@ class LocalDashboardCoordinator:
             _LOGGER.error("Upload failed for %s: %s", configuration, err)
             return False
 
+    async def async_clean(self, configuration: str) -> bool:
+        """Clean build files via local dashboard.
+
+        The esphome_dashboard_api library has no dedicated clean() method,
+        but exposes stream_logs() which works with any WS endpoint name.
+        """
+        dashboard_manager = self._hass.data.get("esphome_dashboard_manager")
+        if dashboard_manager:
+            dashboard = dashboard_manager.async_get()
+            if dashboard and dashboard.api:
+                self._api = dashboard.api
+
+        if not self._api:
+            _LOGGER.error("Cannot clean: API not available")
+            return False
+
+        _LOGGER.info("Cleaning %s via local dashboard", configuration)
+
+        try:
+            result = await self._api.stream_logs(
+                "clean",
+                {"configuration": configuration},
+            )
+            _LOGGER.info("Clean %s: %s", configuration, "success" if result else "failed")
+            return result
+        except Exception as err:
+            _LOGGER.error("Clean failed for %s: %s", configuration, err)
+            return False
+            
     def get_device_by_name(self, name: str) -> dict[str, Any] | None:
         """Get device info by name.
         
