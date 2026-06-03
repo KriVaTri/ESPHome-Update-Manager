@@ -87,6 +87,10 @@ class UpdateQueue:
         return self._addon_name
 
     @property
+    def operation(self) -> str:
+        return getattr(self, "_operation", "force_install")
+
+    @property
     def results(self) -> list[dict[str, Any]]:
         return [
             {
@@ -117,6 +121,7 @@ class UpdateQueue:
         stop_addon_slug: str | None = None,
         version_info: dict | None = None,
         force_install_devices: list[dict] | None = None,
+        operation: str = "force_install",
     ) -> None:
         """Start the update queue.
         
@@ -126,6 +131,8 @@ class UpdateQueue:
             version_info: Optional version info per entity_id.
             force_install_devices: If set, list of dicts with device info for force install.
                 Each dict: {"entity_id": str, "device_id": str, "name": str}
+            operation: One of "force_install" (default, compile+upload), "clean",
+                "compile" (only), or "upload" (only). Applies to force_install_devices only.
         """
         if self._running:
             raise RuntimeError("Update queue is already running")
@@ -136,7 +143,8 @@ class UpdateQueue:
         if force_install_devices is not None:
             # Force install mode - build queue from device list
             _LOGGER.debug(
-                "Starting force install queue with %d devices: %s",
+                "Starting %s queue with %d devices: %s",
+                operation,
                 len(force_install_devices),
                 [d["name"] for d in force_install_devices],
             )
@@ -174,6 +182,7 @@ class UpdateQueue:
         self._addon_was_running = False
         self._phase = PHASE_IDLE
         self._addon_name = None
+        self._operation = operation
         self._task = self.hass.async_create_task(self._run())
 
     def cancel(self) -> None:
@@ -296,7 +305,7 @@ class UpdateQueue:
 
                 self.hass.bus.async_fire(
                     "esphome_update_manager_progress",
-                    {"results": self.results, "summary": self.summary},
+                    {"results": self.results, "summary": self.summary, "operation": self.operation},
                 )
 
                 if i < len(self._queue) - 1 and not self._cancelled:
@@ -329,7 +338,7 @@ class UpdateQueue:
             _LOGGER.info("Update queue finished. Summary: %s", self.summary)
             self.hass.bus.async_fire(
                 "esphome_update_manager_finished",
-                {"results": self.results, "summary": self.summary},
+                {"results": self.results, "summary": self.summary, "operation": self.operation},
             )
 
             if not self._cancelled:
@@ -518,6 +527,80 @@ class UpdateQueue:
         if not configuration.endswith(".yaml"):
             configuration = f"{configuration}.yaml"
 
+        # Handle partial operations (clean / compile-only / upload-only)
+        operation = getattr(self, "_operation", "force_install")
+
+        if operation in ("clean", "compile", "upload"):
+            if self._cancelled:
+                item.status = STATUS_CANCELLED
+                item.error = "Cancelled by user"
+                item.finished_at = datetime.now()
+                return
+
+            # Resolve from/to versions for the log (clean doesn't need to_version)
+            if operation in ("compile", "upload"):
+                from . import (
+                    _build_to_version,
+                    _get_local_esphome_builder_version,
+                    _get_external_dashboard_version,
+                )
+                if coordinator == external_coordinator:
+                    builder_version = (
+                        _get_external_dashboard_version(self.hass)
+                        or _get_local_esphome_builder_version(self.hass)
+                    )
+                else:
+                    builder_version = (
+                        _get_local_esphome_builder_version(self.hass)
+                        or _get_external_dashboard_version(self.hass)
+                    )
+
+                yaml_project_version = None
+                try:
+                    config = await coordinator.async_get_config(configuration)
+                    if config:
+                        yaml_project_version = (
+                            config.get("esphome", {})
+                            .get("project", {})
+                            .get("version")
+                        )
+                except Exception:
+                    pass
+
+                # from_version comes from device.sw_version (already in item.from_version)
+                item.to_version = _build_to_version(
+                    item.from_version, builder_version, yaml_project_version
+                )
+
+            _LOGGER.info(
+                "Running %s for %s (config: %s) via %s dashboard",
+                operation,
+                display_name,
+                configuration,
+                "external" if coordinator == external_coordinator else "local",
+            )
+
+            if operation == "clean":
+                success = await coordinator.async_clean(configuration)
+                error_msg = "Clean failed — check ESPHome dashboard for details"
+            elif operation == "compile":
+                success = await coordinator.async_compile(configuration)
+                error_msg = "Compile failed — check ESPHome dashboard for details"
+            else:  # upload
+                success = await coordinator.async_upload(configuration, "OTA")
+                error_msg = "OTA upload failed — check ESPHome dashboard for details"
+
+            if not success:
+                item.status = STATUS_FAILED
+                item.error = error_msg
+            else:
+                item.status = STATUS_SUCCESS
+
+            item.finished_at = datetime.now()
+            _LOGGER.info("%s completed for %s: %s", operation, display_name, item.status)
+            return
+
+        # Default: full force install (compile + upload) — existing flow below
         from . import _build_to_version, _get_local_esphome_builder_version, _get_external_dashboard_version
         if coordinator == external_coordinator:
             builder_version = _get_external_dashboard_version(self.hass)
