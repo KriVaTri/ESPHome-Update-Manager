@@ -40,3 +40,52 @@ refresh_project_versions:
     bumps. If auto-update is enabled with scope "project" or "both", any detected
     bumps will be queued for force install automatically. Equivalent to clicking
     the refresh button in the panel.
+
+clean_build_files:
+  name: Clean build files
+  description: >-
+    Clean build files for ESPHome devices (equivalent to "Clean Build Files" in the
+    ESPHome dashboard). If no devices are selected, all ESPHome devices will be cleaned.
+  fields:
+    device_id:
+      name: Devices
+      description: One or more ESPHome devices. Leave empty to clean all devices.
+      required: false
+      selector:
+        device:
+          multiple: true
+          integration: esphome
+
+compile:
+  name: Compile firmware
+  description: >-
+    Compile firmware for ESPHome devices WITHOUT uploading (equivalent to
+    "Install → Manual download → Cancel" in the ESPHome dashboard). Useful to
+    pre-compile firmware so a later OTA upload is fast — especially for
+    sleeping devices with short wake windows. If no devices are selected, all
+    ESPHome devices will be compiled.
+  fields:
+    device_id:
+      name: Devices
+      description: One or more ESPHome devices. Leave empty to compile all devices.
+      required: false
+      selector:
+        device:
+          multiple: true
+          integration: esphome
+
+upload:
+  name: OTA upload firmware
+  description: >-
+    OTA upload firmware to ESPHome devices. Assumes firmware is already
+    compiled (run the "Compile firmware" service first for fastest results).
+    If no devices are selected, firmware will be uploaded to all ESPHome devices.
+  fields:
+    device_id:
+      name: Devices
+      description: One or more ESPHome devices. Leave empty to upload to all devices.
+      required: false
+      selector:
+        device:
+          multiple: true
+          integration: esphome
