@@ -24,3 +24,9 @@ DASHBOARD_MODE_LOCAL = "local"
 DASHBOARD_MODE_EXTERNAL = "external"
 CONF_DASHBOARD_USERNAME = "dashboard_username"
 CONF_DASHBOARD_PASSWORD = "dashboard_password"
+
+# Operation types for the update queue
+OPERATION_FORCE_INSTALL = "force_install"
+OPERATION_CLEAN = "clean"
+OPERATION_COMPILE = "compile"
+OPERATION_UPLOAD = "upload"
