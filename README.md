@@ -31,7 +31,6 @@ A custom Home Assistant integration that provides a dedicated panel and lovelace
   - [Service: Refresh project versions](#service-refresh-project-versions)
   - [Granular build services](#granular-build-services)
   - [VS Code Server add-on](#vs-code-server-add-on)
-  - [VS Code Server add-on](#vs-code-server-add-on)
   - [Results](#results)
   - [Update log](#update-log)
   - [Failure notifications](#failure-notifications)
