@@ -25,6 +25,7 @@ A custom Home Assistant integration that provides a dedicated panel and lovelace
     - [Pending force install for offline devices](#pending-force-install-for-offline-devices)
     - [Via service](#via-service-esphome-yaml-force-install)
     - [Project version auto-install](#project-version-auto-install)
+  - [Granular build services](#granular-build-services)
   - [Exclude devices from auto-install](#exclude-devices-from-auto-install)
   - [Auto-install](#auto-install)
   - [VS Code Server add-on](#vs-code-server-add-on)
@@ -61,6 +62,7 @@ A custom Home Assistant integration that provides a dedicated panel and lovelace
 - **Real-time status** — Live progress tracking with online/offline indicators for each device
 - **Resilient queue** — If a device fails, the queue continues with the next device
 - **Cancel anytime** — Cancel running updates at any time; remaining devices are marked as cancelled
+- **Granular build services** — Trigger individual `clean_build_files`, `compile`, or `upload` operations via service calls for use in scripts and automations
 
 ## Requirements
 
@@ -235,6 +237,8 @@ The panel shows all ESPHome devices with:
 | **Enabling…** (orange + spinner) | Entity is being enabled, waiting for HA to pick it up |
 | **Updating…** (blue + spinner) | Update is in progress |
 | **Installing…** (blue + spinner) | Force install is in progress |
+| **Compiling…** (blue + spinner) | Compiling only is in progress |
+| **Uploading…** (blue + spinner) | Uploading only is in progress |
 | **Pending** (grey) | Device is queued for force install — will start automatically when device comes online |
 | **Offline** (grey) | Device is not reachable |
 | **Unavailable** (light blue) | Firmware entity is unavailable (or external dashboard offline) |
@@ -479,6 +483,90 @@ actions:
 mode: single
 ```
 
+### Granular build services
+
+In addition to `start_updates` and `force_install`, the integration provides three services that expose individual steps of the ESPHome build pipeline. Useful for scripts, automations, and advanced workflows.
+
+**Services:**
+
+| Service | Description |
+|---------|-------------|
+| `esphome_update_manager.clean_build_files` | Clean build files (equivalent to *"Clean Build Files"* in the ESPHome dashboard) |
+| `esphome_update_manager.compile` | Compile firmware **without** uploading (equivalent to *"Install → Manual download → Cancel"* in the ESPHome dashboard) |
+| `esphome_update_manager.upload` | OTA upload **pre-compiled** firmware, without compiling first |
+
+**Parameters (all three):**
+
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `device_id` | No | One or more Home Assistant device IDs. Single string or list. **Leave empty to target all ESPHome devices.** |
+
+**Behavior:**
+- All three work with both **local** and **external** dashboards (the integration auto-selects per device, just like Force Install)
+- Operations run sequentially via the same update queue used for firmware updates
+- Progress is visible in the panel and update log (with operation-specific labels)
+- For `compile` and `upload`, the "Stop VS Code Server" setting is respected
+- For `clean`, the add-on is not stopped (cleaning is fast)
+
+**Typical use cases:**
+
+| Use case | Workflow |
+|----------|----------|
+| Pre-compile before a sleep window | `compile` ahead of time, then `upload` the moment the device wakes |
+| Recover from a corrupted build | `clean_build_files` followed by `compile` |
+| Batch OTA during a maintenance window | `compile` all devices overnight, then `upload` later |
+
+**Example automation — pre-compile before a sleeping sensor wakes up:**
+
+```yaml
+alias: Pre-compile sleeping sensor
+triggers:
+  - trigger: time
+    at: "06:55:00"
+actions:
+  - action: esphome_update_manager.compile
+    data:
+      device_id: "abc123def456"
+  # Device wakes around 07:00 — OTA upload is now instant
+```
+
+**Example automation — clean all devices weekly:**
+
+```yaml
+alias: Weekly clean of all ESPHome build files
+triggers:
+  - trigger: time
+    at: "04:00:00"
+conditions:
+  - condition: time
+    weekday:
+      - sun
+actions:
+  - action: esphome_update_manager.clean_build_files
+    # No device_id → cleans all ESPHome devices
+```
+
+**Example script — clean + compile + upload chain for one device:**
+
+```yaml
+sequence:
+  - action: esphome_update_manager.clean_build_files
+    data:
+      device_id: "abc123def456"
+  - wait_template: "{{ not state_attr('sensor.esphome_update_manager', 'running') }}"
+    timeout: "00:05:00"
+  - action: esphome_update_manager.compile
+    data:
+      device_id: "abc123def456"
+  - wait_template: "{{ not state_attr('sensor.esphome_update_manager', 'running') }}"
+    timeout: "00:30:00"
+  - action: esphome_update_manager.upload
+    data:
+      device_id: "abc123def456"
+```
+
+> **Note:** Only one operation can run at a time — if the update queue is already busy when you call one of these services, the call fails with an error. Wait for the current operation to finish, or chain them sequentially as shown above.
+
 ### VS Code Server add-on
 
 If the **VS Code Server** (Studio Code Server) add-on is installed, a checkbox appears:
@@ -515,7 +603,7 @@ Access update logs via the **⋮** menu in the top-right corner of the panel:
 
 Each log includes:
 - Timestamp of the job run and integration version used
-- Job type (Update or Force Install)
+- Job type (Firmware Update, Force Install, Clean Build Files, Compile Only, or OTA Upload Only)
 - Summary with success/failed/skipped/cancelled counts
 - Details per device including status, version (from → to), start time, finish time, and any error messages
 
