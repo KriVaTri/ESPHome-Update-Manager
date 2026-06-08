@@ -610,8 +610,8 @@ Each log includes:
 - Details per device including status, version (from → to), start time, finish time, and any error messages
 
 Logs are stored at:
-- Current log: `config/www/esphome-update-manager/update_log.txt`
-- Backups: `config/www/esphome-update-manager/log-backups/`
+- Current log: `config/esphome-update-manager/update_log.txt`
+- Backups: `config/esphome-update-manager/log-backups/`
 
 A new backup is created automatically after each update batch completes. The number of backups kept can be configured in the integration settings (set to 0 to disable backups).
 
