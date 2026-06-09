@@ -213,10 +213,13 @@ class ESPHomeUpdatePanel extends LitElement {
     }
   }
 
-    async _subscribeToDevicesUpdated() {
+  async _subscribeToDevicesUpdated() {
     try {
       this._devicesUpdatedSubscription = await this.hass.connection.subscribeMessage(
-        () => this._loadDevices(),
+        async () => {
+          await this._pollStatus();
+          await this._loadDevices();
+        },
         { type: "esphome_update_manager/subscribe_devices_updated" }
       );
     } catch (e) {
@@ -1455,10 +1458,13 @@ class ESPHomeUpdatePanel extends LitElement {
       }
       .version .arrow { color: #4caf50; font-weight: bold; }
       .checkbox-col { flex: 0 0 24px; display: flex; align-items: center; justify-content: center; }
-      .checkbox-col input[type="checkbox"] {
+      .checkbox-col input[type="checkbox"],
+      .btn-select-all input[type="checkbox"],
+      .addon-option input[type="checkbox"] {
         margin: 0;
         width: 14px;
         height: 14px;
+        accent-color: #1976d2;
       }
       .checkbox-col input:disabled { opacity: 0; }
       button {
