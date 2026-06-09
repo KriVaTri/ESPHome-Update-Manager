@@ -1755,6 +1755,7 @@ class ESPHomeUpdatePanel extends LitElement {
       .content.compact .addon-option input[type="checkbox"] {
         width: 13.5px;
         height: 13.5px;
+        accent-color: #1976d2;
       }
       @media (pointer: coarse) {
         :host([cardmode]) .auto-update-select { transform: translateY(-0.5px); }
@@ -1775,12 +1776,14 @@ class ESPHomeUpdatePanel extends LitElement {
           height: 14px;
           min-width: 14px;
           min-height: 14px;
+          accent-color: #1976d2;
         }
         .btn-select-all input[type="checkbox"] {
           width: 14.5px;
           height: 14.5px;
           min-width: 14.5px;
           min-height: 14.5px;
+          accent-color: #1976d2;
         }
         .content.compact .device-row { padding-left: 9px; padding-right: 10px; }
         .content.compact .toolbar { padding-left: 10px; }
