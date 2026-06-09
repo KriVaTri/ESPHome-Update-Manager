@@ -555,16 +555,30 @@ sequence:
   - action: esphome_update_manager.clean_build_files
     data:
       device_id: "abc123def456"
-  - wait_template: "{{ not state_attr('sensor.esphome_update_manager', 'running') }}"
+  - wait_for_trigger:
+      - trigger: event
+        event_type: esphome_update_manager_finished
+        event_data:
+          operation: clean
     timeout: "00:05:00"
   - action: esphome_update_manager.compile
     data:
       device_id: "abc123def456"
-  - wait_template: "{{ not state_attr('sensor.esphome_update_manager', 'running') }}"
+  - wait_for_trigger:
+      - trigger: event
+        event_type: esphome_update_manager_finished
+        event_data:
+          operation: compile
     timeout: "00:30:00"
   - action: esphome_update_manager.upload
     data:
       device_id: "abc123def456"
+  - wait_for_trigger:
+      - trigger: event
+        event_type: esphome_update_manager_finished
+        event_data:
+          operation: upload
+    timeout: "00:10:00"
 ```
 
 > **Note:** Only one operation can run at a time — if the update queue is already busy when you call one of these services, the call fails with an error. Wait for the current operation to finish, or chain them sequentially as shown above.
