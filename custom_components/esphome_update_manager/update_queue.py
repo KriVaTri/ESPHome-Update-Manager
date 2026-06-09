@@ -278,17 +278,23 @@ class UpdateQueue:
                     recent = data.setdefault("recent_successful_updates", {})
                     recent[item.device_id] = datetime.now()
 
-                    # Only pop pv_cache if device is still online — if it has
-                    # rebooted offline, we want to keep showing the bump target
-                    # version in the panel until the device comes back with its
-                    # updated sw_version. _trigger_device_online_checks will
-                    # pop the cache once it confirms device_v >= yaml_v.
-                    from homeassistant.helpers import entity_registry as er
-                    from . import _is_device_online
-                    ent_reg = er.async_get(self.hass)
-                    if _is_device_online(self.hass, ent_reg, item.device_id) is True:
-                        pv_cache = data.get("project_version_cache", {})
-                        pv_cache.pop(item.device_id, None)
+                    # Only pop pv_cache when the device was actually flashed
+                    # (upload / force_install). compile and clean don't change
+                    # what's installed on the device, so the project bump is
+                    # still pending and the panel must keep showing it.
+                    #
+                    # And: only pop if device is still online — if it has
+                    # rebooted offline, keep the bump target visible until the
+                    # device comes back with updated sw_version.
+                    # _trigger_device_online_checks pops the cache once it
+                    # confirms device_v >= yaml_v.
+                    if self._operation in ("upload", "force_install"):
+                        from homeassistant.helpers import entity_registry as er
+                        from . import _is_device_online
+                        ent_reg = er.async_get(self.hass)
+                        if _is_device_online(self.hass, ent_reg, item.device_id) is True:
+                            pv_cache = data.get("project_version_cache", {})
+                            pv_cache.pop(item.device_id, None)
 
                     pending_project = data.get("pending_project_installs", {})
                     if pending_project:
@@ -580,6 +586,17 @@ class UpdateQueue:
                 "external" if coordinator == external_coordinator else "local",
             )
 
+            # Refresh pv_cache before compile so the panel reflects "→ new
+            # project" right as the operation starts (matches the full
+            # force-install flow). Only relevant for compile — clean
+            # doesn't change yaml-vs-device state, upload happens after
+            # an earlier compile already set the cache.
+            if operation == "compile" and item.device_id:
+                from . import _check_project_version_update_by_device
+                await _check_project_version_update_by_device(
+                    self.hass, item.device_id
+                )
+
             if operation == "clean":
                 success = await coordinator.async_clean(configuration)
                 error_msg = "Clean failed — check ESPHome dashboard for details"
@@ -641,6 +658,17 @@ class UpdateQueue:
             item.error = "Cancelled by user"
             item.finished_at = datetime.now()
             return
+
+        # Refresh pv_cache BEFORE compile so the panel reflects "→ new
+        # project" right as the install starts, matching the update-button
+        # flow (which pre-populates pv_cache via ws_start_updates →
+        # _get_yaml_project_version). yaml doesn't change during compile,
+        # so one fetch up front is enough.
+        if item.device_id:
+            from . import _check_project_version_update_by_device
+            await _check_project_version_update_by_device(
+                self.hass, item.device_id
+            )
 
         compile_success = await coordinator.async_compile(configuration)
         if not compile_success:
