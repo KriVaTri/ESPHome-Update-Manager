@@ -409,11 +409,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             if not did:
                 continue
             recent_updates[did] = datetime.now()
-            # Only pop pv_cache if device is actually online — if it's still
-            # rebooting offline, popping now hides the "→ new" version in the
-            # panel. The frontend's pv_cache self-validation will pop it
+            # Only pop pv_cache when the device was actually flashed
+            # (upload / force_install). compile and clean don't change
+            # what's installed, so the bump is still pending.
+            # And only pop if device is online — if it's still rebooting
+            # offline, popping now hides the "→ new" version in the panel.
+            # The frontend's pv_cache self-validation will pop it
             # automatically once the device returns with updated sw_version.
-            if _is_device_online(hass, ent_reg_for_cleanup, did) is True:
+            if (
+                operation in ("upload", "force_install")
+                and _is_device_online(hass, ent_reg_for_cleanup, did) is True
+            ):
                 if pv_cache.pop(did, None) is not None:
                     _LOGGER.debug("Cleared project version cache for %s after successful update", did)
             if pending_project.pop(did, None) is not None:
