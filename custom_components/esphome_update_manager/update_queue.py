@@ -604,7 +604,9 @@ class UpdateQueue:
                 success = await coordinator.async_compile(configuration)
                 error_msg = "Compile failed — check ESPHome dashboard for details"
             else:  # upload
-                success = await coordinator.async_upload(configuration, "OTA")
+                from . import _resolve_ota_port
+                ota_port = _resolve_ota_port(self.hass, item.device_id)
+                success = await coordinator.async_upload(configuration, ota_port)
                 error_msg = "OTA upload failed — check ESPHome dashboard for details"
 
             if not success:
@@ -684,7 +686,9 @@ class UpdateQueue:
             item.finished_at = datetime.now()
             return
 
-        upload_success = await coordinator.async_upload(configuration, "OTA")
+        from . import _resolve_ota_port
+        ota_port = _resolve_ota_port(self.hass, item.device_id)
+        upload_success = await coordinator.async_upload(configuration, ota_port)
         if not upload_success:
             item.status = STATUS_FAILED
             item.error = "OTA upload failed — check ESPHome dashboard for details"
@@ -756,7 +760,9 @@ class UpdateQueue:
             item.finished_at = datetime.now()
             return
 
-        upload_success = await coordinator.async_upload(configuration, "OTA")
+        from . import _resolve_ota_port
+        ota_port = _resolve_ota_port(self.hass, item.device_id)
+        upload_success = await coordinator.async_upload(configuration, ota_port)
         if not upload_success:
             item.status = STATUS_FAILED
             item.error = "OTA upload failed on external dashboard"
