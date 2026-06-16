@@ -2290,6 +2290,57 @@ def _get_mac_suffix(device: dr.DeviceEntry) -> str | None:
     return None
 
 
+def _get_device_ip(hass: HomeAssistant, device_id: str | None) -> str | None:
+    """Return the IP address HA knows for an ESPHome device, or None.
+
+    Reads the host from the device's ESPHome config entry. Only returns a
+    value when it is a literal IP address (not a .local hostname), since the
+    whole point is to bypass mDNS resolution.
+    """
+    if not device_id:
+        return None
+
+    dev_reg = dr.async_get(hass)
+    device = dev_reg.async_get(device_id)
+    if device is None:
+        return None
+
+    for entry in hass.config_entries.async_entries("esphome"):
+        if entry.entry_id not in device.config_entries:
+            continue
+        host = entry.data.get("host")
+        if not host:
+            return None
+        host = str(host).strip()
+        # Strip a trailing port if present (e.g. "192.168.1.50:6053")
+        candidate = host.rsplit(":", 1)[0] if host.count(":") == 1 and "." in host else host
+        try:
+            import ipaddress
+            ipaddress.ip_address(candidate)
+            return candidate
+        except ValueError:
+            # Not a literal IP (probably a hostname) → no benefit, skip
+            _LOGGER.debug(
+                "Device %s host '%s' is not a literal IP, cannot use IP-OTA",
+                device_id, host,
+            )
+            return None
+    return None
+
+
+def _resolve_ota_port(hass: HomeAssistant, device_id: str | None) -> str:
+    """Prefer the device IP HA already knows for OTA, falling back to mDNS.
+
+    Returns the literal IP when available (bypassing mDNS, which can fail for
+    devices with name_add_mac_suffix), otherwise the default "OTA".
+    """
+    ip = _get_device_ip(hass, device_id)
+    if ip:
+        _LOGGER.info("Using IP %s for OTA upload (device %s)", ip, device_id)
+        return ip
+    return "OTA"
+
+
 def _build_to_version(sw_version_raw: str | None, new_esphome_version: str | None, new_project_version: str | None = None) -> str | None:
     """Build expected to_version string based on current sw_version format.
 
