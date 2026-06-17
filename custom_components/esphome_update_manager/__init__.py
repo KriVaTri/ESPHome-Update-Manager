@@ -2336,8 +2336,10 @@ def _resolve_ota_port(hass: HomeAssistant, device_id: str | None) -> str:
     """
     ip = _get_device_ip(hass, device_id)
     if ip:
-        _LOGGER.info("Using IP %s for OTA upload (device %s)", ip, device_id)
+        _LOGGER.debug("Using IP %s for OTA upload (device %s)", ip, device_id)
         return ip
+    _LOGGER.info("No IP known for device %s, falling back to mDNS-based OTA", device_id)
+    _LOGGER.debug("Using mDNS-based OTA for device %s", device_id)
     return "OTA"
 
 
