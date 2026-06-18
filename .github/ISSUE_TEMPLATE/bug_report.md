@@ -24,7 +24,11 @@ If applicable, add screenshots to help explain your problem.
 
 **Home Assistant**
  - Version [e.g. 2026.5.0]: 
- - Host machine [e.g. Rpi, NUC]: 
+ - Host machine [e.g. Rpi, NUC]:
+
+**ESPHome builder**
+- Version [e.g. 2026.6.0]:
+- External or local HA app?:
 
 **Additional context**
 Add any other context about the problem here.
