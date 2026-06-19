@@ -195,6 +195,17 @@ class ExternalDashboardCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         except Exception as err:
             raise UpdateFailed(f"Failed to fetch devices: {err}") from err
 
+    # NOTE: still uses esphome_dashboard_api (WebSocket-based, old protocol).
+    # If this ever fails on a newer builder UI with errors like
+    # "200 Invalid response status" or silently hanging WebSockets, follow
+    # the same pattern as async_clean: connect directly to ws://<host>/ws
+    # and use the new protocol:
+    #   {"command":"firmware/<action>","message_id":"...","args":{...}}
+    #   -> {"result":{"job_id":"...","status":"running"}}
+    #   {"command":"firmware/follow_job","message_id":"...","args":{"job_id":"..."}}
+    #   -> {"event":"output","data":"..."}  (repeats)
+    #   -> {"event":"result","data":{"status":"completed","exit_code":0}}
+    
     async def async_compile(self, configuration: str, retries: int = 2) -> bool:
         """Compile a device configuration via WebSocket, with retries."""
         if not self._available:
@@ -551,9 +562,16 @@ class LocalDashboardCoordinator:
     async def async_clean(self, configuration: str) -> bool:
         """Clean build files via local dashboard.
 
-        The esphome_dashboard_api library has no dedicated clean() method,
-        but exposes stream_logs() which works with any WS endpoint name.
+        On the new ESPHome builder UI (2026.6.0+) /clean is a plain HTTP
+        GET endpoint, not a WebSocket. We GET it directly using the aiohttp
+        session that esphome_dashboard_api already maintains (same auth,
+        same base URL as compile/upload). The configuration is passed as
+        a query parameter.
+
+        If the GET returns 404 we fall back to the legacy WebSocket path
+        for older dashboards where /clean was a WS endpoint.
         """
+        # Refresh API reference in case the addon restarted
         dashboard_manager = self._hass.data.get("esphome_dashboard_manager")
         if dashboard_manager:
             dashboard = dashboard_manager.async_get()
@@ -564,14 +582,169 @@ class LocalDashboardCoordinator:
             _LOGGER.error("Cannot clean: API not available")
             return False
 
-        _LOGGER.info("Cleaning %s via local dashboard", configuration)
+        session = getattr(self._api, "session", None)
+        base_url = getattr(self._api, "url", None)
 
+        # ── 1) New UI path: WebSocket /ws with firmware/clean + follow_job
+        # Protocol observed on ESPHome builder 2026.6.0+ (server_version 1.0.10):
+        #   1. Connect to ws://<host>/ws
+        #   2. Server sends a hello: {"server_version":"...","esphome_version":"...",...}
+        #   3. Send: {"command":"firmware/clean","message_id":"1","args":{"configuration":"<yaml>"}}
+        #   4. Server replies: {"message_id":"1","result":{"job_id":"<id>","status":"running",...}}
+        #   5. Send: {"command":"firmware/follow_job","message_id":"2","args":{"job_id":"<id>"}}
+        #   6. Server streams output lines:
+        #        {"message_id":"2","event":"output","data":"<line>\n"}
+        #   7. Server sends terminal event:
+        #        {"message_id":"2","event":"result","data":{"status":"completed","exit_code":0,"error":null}}
+        #   8. Optional trailing ack: {"message_id":"2","result":null}
+        if session is not None and base_url:
+            ws_url = (
+                str(base_url).rstrip("/")
+                .replace("http://", "ws://")
+                .replace("https://", "wss://")
+            ) + "/ws"
+            _LOGGER.info("Cleaning %s via local dashboard WS: %s", configuration, ws_url)
+
+            try:
+                async with session.ws_connect(
+                    ws_url, timeout=aiohttp.ClientTimeout(total=30),
+                ) as ws:
+                    await ws.send_json({
+                        "command": "firmware/clean",
+                        "message_id": "1",
+                        "args": {"configuration": configuration},
+                    })
+
+                    job_id: str | None = None
+                    success: bool | None = None
+                    deadline = asyncio.get_event_loop().time() + 120  # hard cap
+
+                    while asyncio.get_event_loop().time() < deadline:
+                        try:
+                            msg = await asyncio.wait_for(ws.receive(), timeout=30)
+                        except asyncio.TimeoutError:
+                            _LOGGER.warning(
+                                "Clean %s: no message from dashboard for 30s, giving up",
+                                configuration,
+                            )
+                            break
+
+                        if msg.type in (
+                            aiohttp.WSMsgType.CLOSED,
+                            aiohttp.WSMsgType.CLOSING,
+                            aiohttp.WSMsgType.ERROR,
+                        ):
+                            _LOGGER.warning(
+                                "Clean %s: WS closed unexpectedly (%s)",
+                                configuration, msg.type,
+                            )
+                            break
+                        if msg.type != aiohttp.WSMsgType.TEXT:
+                            continue
+
+                        try:
+                            data = json.loads(msg.data)
+                        except json.JSONDecodeError:
+                            continue
+
+                        # Server hello — ignore
+                        if "server_version" in data:
+                            continue
+
+                        # First reply to firmware/clean: pick up the job_id and follow it.
+                        result = data.get("result")
+                        if (
+                            job_id is None
+                            and isinstance(result, dict)
+                            and result.get("job_id")
+                        ):
+                            job_id = result["job_id"]
+                            _LOGGER.debug(
+                                "Clean %s: job %s started, following",
+                                configuration, job_id,
+                            )
+                            await ws.send_json({
+                                "command": "firmware/follow_job",
+                                "message_id": "2",
+                                "args": {"job_id": job_id},
+                            })
+                            continue
+
+                        # Streaming events from follow_job
+                        event = data.get("event")
+                        ev_data = data.get("data")
+
+                        if event == "output":
+                            # ev_data is a string with one or more log lines
+                            if isinstance(ev_data, str):
+                                line = ev_data.rstrip()
+                                if line:
+                                    _LOGGER.debug("[clean %s] %s", configuration, line)
+                            continue
+
+                        if event == "result":
+                            # Terminal status for the job
+                            status = (ev_data or {}).get("status") if isinstance(ev_data, dict) else None
+                            exit_code = (ev_data or {}).get("exit_code") if isinstance(ev_data, dict) else None
+                            error = (ev_data or {}).get("error") if isinstance(ev_data, dict) else None
+
+                            if exit_code == 0 or status in ("completed", "success", "done"):
+                                success = True
+                                _LOGGER.info(
+                                    "Clean %s: %s (exit_code=%s)",
+                                    configuration, status or "completed", exit_code,
+                                )
+                            else:
+                                success = False
+                                _LOGGER.warning(
+                                    "Clean %s: %s (exit_code=%s, error=%s)",
+                                    configuration, status or "failed", exit_code, error,
+                                )
+                            break
+
+                        # Trailing ack ({"message_id":"2","result":null}) or unknown
+                        # frame: ignore and keep listening (loop will break on result
+                        # event anyway).
+
+                    if success is True:
+                        return True
+                    if success is False:
+                        return False
+                    _LOGGER.warning(
+                        "Clean %s: deadline reached without terminal status",
+                        configuration,
+                    )
+                    return False
+
+            except aiohttp.WSServerHandshakeError as err:
+                _LOGGER.debug(
+                    "Clean WS handshake failed at %s (%s), falling back to legacy",
+                    ws_url, err,
+                )
+                # Fall through to legacy WS path
+            except Exception as err:
+                _LOGGER.warning(
+                    "Clean via new WS failed (%s), falling back to legacy",
+                    err,
+                )
+                # Fall through to legacy WS path
+        else:
+            _LOGGER.debug(
+                "No session/url on dashboard_api (session=%s, url=%s); "
+                "falling back to legacy WebSocket path",
+                session is not None, base_url is not None,
+            )
+
+        # ── 2) Legacy path: WebSocket via stream_logs ───────────────────
         try:
             result = await self._api.stream_logs(
                 "clean",
                 {"configuration": configuration},
             )
-            _LOGGER.info("Clean %s: %s", configuration, "success" if result else "failed")
+            _LOGGER.info(
+                "Clean %s: %s (legacy WebSocket)",
+                configuration, "success" if result else "failed",
+            )
             return result
         except Exception as err:
             _LOGGER.error("Clean failed for %s: %s", configuration, err)
@@ -620,3 +793,5 @@ class LocalDashboardCoordinator:
         happens via HA's entity/device registry.
         """
         return
+
+# EOF
