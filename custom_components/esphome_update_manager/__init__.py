@@ -1408,7 +1408,7 @@ async def _check_project_version_update_by_device(hass: HomeAssistant, device_id
     if _is_esphome_subdevice(hass, device):
         return
 
-    original_name = device.name
+    original_name = _get_esphome_node_name(hass, device)
     if not original_name:
         return
 
@@ -1988,12 +1988,13 @@ async def async_handle_force_install(hass: HomeAssistant, call: ServiceCall) -> 
             continue
 
         name = device.name_by_user or device.name or device_id
+        node_name = _get_esphome_node_name(hass, device) or name
         raw = device.sw_version
 
         # Split into online vs offline
         if _is_device_online(hass, ent_reg, device_id) is True:
             online_devices.append({
-                "entity_id": f"force:{_normalize_device_name(name)}",
+                "entity_id": f"force:{_normalize_device_name(node_name)}",
                 "device_id": device_id,
                 "name": name,
                 "from_version": raw,
@@ -2574,6 +2575,42 @@ async def _refresh_local_yaml_cache(
         hass.bus.async_fire("esphome_update_manager_devices_updated")
 
 
+def _get_esphome_node_name(hass: HomeAssistant, device: dr.DeviceEntry) -> str | None:
+    """Return the ESPHome node name (= YAML filename, = esphome.name in YAML).
+
+    HA's device.name is set to the ESPHome 'friendly_name' when one is
+    configured, which is NOT the YAML filename. The real node name lives
+    on the ESPHome config entry as entry.data["device_name"].
+
+    Fallback chain:
+    1. entry.data["device_name"] of the ESPHome config entry
+    2. runtime_data.device_info.name (set after the API connection is up)
+    3. device.name (last resort, only correct when no friendly_name is set)
+    """
+    if device is None:
+        return None
+
+    # 1) Config entry data — populated at integration setup, always available
+    for entry in hass.config_entries.async_entries("esphome"):
+        if entry.entry_id in device.config_entries:
+            node_name = entry.data.get("device_name")
+            if node_name:
+                return str(node_name)
+
+            # 2) Runtime data (available once the device API connected)
+            runtime_data = getattr(entry, "runtime_data", None)
+            if runtime_data is not None:
+                device_info = getattr(runtime_data, "device_info", None)
+                if device_info is not None:
+                    rt_name = getattr(device_info, "name", None)
+                    if rt_name:
+                        return str(rt_name)
+            break
+
+    # 3) Last resort — only correct when no friendly_name is configured
+    return device.name
+
+
 def _get_esphome_update_entities(hass: HomeAssistant) -> list[dict[str, Any]]:
     """Get all ESPHome update entities with their status."""
     ent_reg = er.async_get(hass)
@@ -2663,7 +2700,7 @@ def _get_esphome_update_entities(hass: HomeAssistant) -> list[dict[str, Any]]:
             if device_id:
                 dev = dev_reg.async_get(device_id)
                 if dev:
-                    original_name = dev.name
+                    original_name = _get_esphome_node_name(hass, dev)
                     mac_suffix = _get_mac_suffix(dev)
             
             external_device_info = _match_device_to_external_dashboard(
@@ -2816,7 +2853,19 @@ def _get_esphome_update_entities(hass: HomeAssistant) -> list[dict[str, Any]]:
                 state_latest = _parse_version(
                     state.attributes.get("latest_version")
                 )
-                latest = state_latest or builder_version
+                # The update entity's latest_version can lag behind a freshly
+                # bumped builder (HA's ESPHome integration doesn't push the
+                # new builder version to every update entity immediately).
+                # Pick whichever is highest — the builder is ground truth for
+                # what would actually be compiled.
+                if state_latest and builder_version:
+                    if _is_update_available(state_latest, builder_version):
+                        # builder is newer than what the entity reports
+                        latest = builder_version
+                    else:
+                        latest = state_latest
+                else:
+                    latest = state_latest or builder_version
 
             # Calculate update availability based on correct builder version
             actually_newer = _is_update_available(installed, latest)
@@ -2872,7 +2921,7 @@ def _get_esphome_update_entities(hass: HomeAssistant) -> list[dict[str, Any]]:
         processed_device_ids.add(device.id)
         
         name = device.name_by_user or device.name or "Unknown device"
-        original_name = device.name
+        original_name = _get_esphome_node_name(hass, device)
         normalized_name = _normalize_device_name(name)
         
         # Skip if already processed (by name)
@@ -3205,7 +3254,7 @@ def _has_ready_pending_devices(hass: HomeAssistant, pending: dict) -> bool:
             ext_dev = _match_device_to_external_dashboard(
                 hass,
                 device.name_by_user or device.name or "",
-                original_name=device.name,
+                original_name=_get_esphome_node_name(hass, device),
                 mac_suffix=mac_suffix,
             )
             if ext_dev and not external_available:
@@ -3256,15 +3305,16 @@ async def _execute_pending_force_installs(hass: HomeAssistant) -> None:
             ext_dev = _match_device_to_external_dashboard(
                 hass,
                 device.name_by_user or device.name or "",
-                original_name=device.name,
+                original_name=_get_esphome_node_name(hass, device),
                 mac_suffix=mac_suffix,
             )
             if ext_dev and not external_available:
                 continue
 
         name = device.name_by_user or device.name or device_id
+        node_name = _get_esphome_node_name(hass, device) or device.name or name
         ready_devices.append({
-            "entity_id": f"force:{_normalize_device_name(device.name or name)}",
+            "entity_id": f"force:{_normalize_device_name(node_name)}",
             "device_id": device_id,
             "name": name,
             "from_version": device.sw_version,
@@ -3357,7 +3407,7 @@ async def _get_yaml_project_version(hass: HomeAssistant, device: dict) -> str | 
         if (datetime.now() - ts).total_seconds() < 30:
             return val
 
-    original_name = device_entry.name
+    original_name = _get_esphome_node_name(hass, device_entry)
     local_coordinator = hass.data[DOMAIN].get("local_dashboard")
     external_coordinator = hass.data[DOMAIN].get("external_dashboard")
 
