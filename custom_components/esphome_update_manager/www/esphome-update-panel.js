@@ -1111,8 +1111,8 @@ class ESPHomeUpdatePanel extends LitElement {
     // Operation-specific status text
     switch (this._operation) {
       case "clean":    return "Cleaning build files…";
-      case "compile":  return "Compiling firmware…";
-      case "upload":   return "Uploading firmware (OTA)…";
+      case "compile":  return "Compiling…";
+      case "upload":   return "Uploading…";
       case "force_install":
       default:
         // operation is "force_install" server-side for BOTH real force installs
@@ -1121,7 +1121,7 @@ class ESPHomeUpdatePanel extends LitElement {
         // is set before the WS call in the force-install / project-bump flows and
         // reconstructed on resume in _restoreUpdatingState(). Regular updates
         // never set it, so they correctly show "Updating…".
-        return this._isForceInstallRun ? "Compiling and uploading yaml…" : "Updating…";
+        return this._isForceInstallRun ? "Compiling and uploading…" : "Updating…";
     }
   }
 
