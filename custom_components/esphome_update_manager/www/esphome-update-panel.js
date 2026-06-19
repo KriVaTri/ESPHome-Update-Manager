@@ -599,6 +599,9 @@ class ESPHomeUpdatePanel extends LitElement {
           this._clearAllUpdatingTimers();
           this._forceInstallingIds = new Map();
           this._cancelling = false;
+          this._phase = "idle";
+          this._operation = "force_install";
+          this._isForceInstallRun = false;
           this.selected.clear();
           await this._loadDevices();
           await this._loadAddonInfo();
@@ -746,6 +749,7 @@ class ESPHomeUpdatePanel extends LitElement {
       const timeoutId = setTimeout(() => this._expireUpdating(entityId), UPDATING_TIMEOUT_MS);
       this._updatingIds = new Map(this._updatingIds);
       this._updatingIds.set(entityId, { startedAt: Date.now(), timeoutId });
+      this._operation = "force_install";
       this.requestUpdate();
       await this.hass.callWS({
         type: "esphome_update_manager/start",
@@ -779,6 +783,7 @@ class ESPHomeUpdatePanel extends LitElement {
     // A project-bump install runs through the force-install flow, so mark intent
     // before the await for correct status text and no flicker.
     this._isForceInstallRun = true;
+    this._operation = "force_install";
     this.requestUpdate();
     try {
       await this.hass.callWS({
@@ -822,6 +827,7 @@ class ESPHomeUpdatePanel extends LitElement {
       ids.forEach((id) => {
         this._updatingIds.set(id, { startedAt: null, timeoutId: null, isRunning: false });
       });
+      this._operation = "force_install";
       this.requestUpdate();
       await this.hass.callWS({
         type: "esphome_update_manager/start",
@@ -1046,6 +1052,7 @@ class ESPHomeUpdatePanel extends LitElement {
     // "Compiling and uploading yaml…" immediately, with no "Updating…" flicker
     // during the WS round-trip / first status poll.
     this._isForceInstallRun = true;
+    this._operation = "force_install";
     try {
       await this.hass.callWS({
         type: "esphome_update_manager/start",
