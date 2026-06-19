@@ -489,9 +489,10 @@ class UpdateQueue:
             item.finished_at = datetime.now()
             return
 
-        original_name = device.name
+        from . import _get_esphome_node_name
+        original_name = _get_esphome_node_name(self.hass, device)
         user_name = device.name_by_user
-        display_name = user_name or original_name or item.device_id
+        display_name = user_name or device.name or item.device_id
 
         if not original_name:
             item.status = STATUS_FAILED
@@ -508,7 +509,7 @@ class UpdateQueue:
             mac_suffix = _get_mac_suffix(device)
             external_device = _match_device_to_external_dashboard(
                 self.hass,
-                user_name or original_name,
+                user_name or device.name or original_name,
                 original_name=original_name,
                 mac_suffix=mac_suffix,
             )
@@ -727,11 +728,13 @@ class UpdateQueue:
             dev_reg = dr.async_get(self.hass)
             device = dev_reg.async_get(item.device_id)
             if device:
+                from . import _get_esphome_node_name
                 mac_suffix = _get_mac_suffix(device)
+                node_name = _get_esphome_node_name(self.hass, device)
                 external_device = _match_device_to_external_dashboard(
                     self.hass,
                     device.name_by_user or device.name,
-                    original_name=device.name,
+                    original_name=node_name,
                     mac_suffix=mac_suffix,
                 )
                 if external_device:
@@ -871,3 +874,5 @@ class UpdateQueue:
         if saw_in_progress:
             return False, "Update timed out — device may still be updating"
         return False, "Update timed out — no progress detected"
+
+# EOF
