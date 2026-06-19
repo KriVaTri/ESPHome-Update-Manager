@@ -395,6 +395,19 @@ class ESPHomeUpdatePanel extends LitElement {
 
   _restoreUpdatingState() {
     if (!this.results || this.results.length === 0) return;
+
+    // Reconstruct the force-install intent flag after a reload/resume so the
+    // status bar shows the correct text. A run counts as a force install when
+    // every still-active (running/queued) item is a force install. Using the
+    // active items (not results.some) avoids a stale earlier regular-update
+    // result flipping the text incorrectly.
+    const active = this.results.filter(
+      (r) => r.status === "running" || r.status === "queued"
+    );
+    if (active.length > 0 && active.every((r) => r.is_force_install)) {
+      this._isForceInstallRun = true;
+    }
+
     this._updatingIds = new Map(this._updatingIds);
     
     const merged = this._mergedDevices();
@@ -763,6 +776,9 @@ class ESPHomeUpdatePanel extends LitElement {
     }];
     this._forceInstallingIds = new Map(this._forceInstallingIds);
     this._forceInstallingIds.set(d.entity_id, { startedAt: null, timeoutId: null, isRunning: false });
+    // A project-bump install runs through the force-install flow, so mark intent
+    // before the await for correct status text and no flicker.
+    this._isForceInstallRun = true;
     this.requestUpdate();
     try {
       await this.hass.callWS({
@@ -774,6 +790,8 @@ class ESPHomeUpdatePanel extends LitElement {
       this.running = true;
       this._startStatusPolling();
     } catch (e) {
+      // Roll back so a failed start doesn't leave the flag/bar stuck.
+      this._isForceInstallRun = false;
       this._forceInstallingIds.delete(d.entity_id);
       this._forceInstallingIds = new Map(this._forceInstallingIds);
       throw e;
@@ -1024,6 +1042,10 @@ class ESPHomeUpdatePanel extends LitElement {
     });
     this.requestUpdate();
 
+    // Set the intent flag BEFORE the await so the status bar shows
+    // "Compiling and uploading yaml…" immediately, with no "Updating…" flicker
+    // during the WS round-trip / first status poll.
+    this._isForceInstallRun = true;
     try {
       await this.hass.callWS({
         type: "esphome_update_manager/start",
@@ -1032,13 +1054,14 @@ class ESPHomeUpdatePanel extends LitElement {
         stop_addon_slug: this._getStopAddonSlug(),
       });
       this.running = true;
-      this._isForceInstallRun = true;
       this._forceInstallMode = false;
       this.selected.clear();
       this._startStatusPolling();
       this.requestUpdate();
     } catch (e) {
       console.error("Force install failed:", e);
+      // Roll back the intent flag so a failed start doesn't leave the bar stuck.
+      this._isForceInstallRun = false;
       this._localResults = [
         ...this._localResults,
         {
@@ -1084,13 +1107,14 @@ class ESPHomeUpdatePanel extends LitElement {
       case "compile":  return "Compiling firmware…";
       case "upload":   return "Uploading firmware (OTA)…";
       case "force_install":
-        return "Compiling and uploading yaml…";
       default:
-        // Normal firmware-OTA update flow (operation defaults to force_install
-        // server-side, but for regular updates the queue uses force_install too,
-        // so distinguish via results)
-        const isForceInstall = this._isForceInstallRun || this.results.some(r => r.is_force_install);
-        return isForceInstall ? "Compiling and uploading yaml…" : "Updating…";
+        // operation is "force_install" server-side for BOTH real force installs
+        // and regular updates (the queue uses the force_install flow for both),
+        // so we can't distinguish on operation alone. Use the intent flag, which
+        // is set before the WS call in the force-install / project-bump flows and
+        // reconstructed on resume in _restoreUpdatingState(). Regular updates
+        // never set it, so they correctly show "Updating…".
+        return this._isForceInstallRun ? "Compiling and uploading yaml…" : "Updating…";
     }
   }
 
@@ -1755,7 +1779,6 @@ class ESPHomeUpdatePanel extends LitElement {
       .content.compact .addon-option input[type="checkbox"] {
         width: 13.5px;
         height: 13.5px;
-        accent-color: #1976d2;
       }
       @media (pointer: coarse) {
         :host([cardmode]) .auto-update-select { transform: translateY(-0.5px); }
@@ -1776,14 +1799,12 @@ class ESPHomeUpdatePanel extends LitElement {
           height: 14px;
           min-width: 14px;
           min-height: 14px;
-          accent-color: #1976d2;
         }
         .btn-select-all input[type="checkbox"] {
           width: 14.5px;
           height: 14.5px;
           min-width: 14.5px;
           min-height: 14.5px;
-          accent-color: #1976d2;
         }
         .content.compact .device-row { padding-left: 9px; padding-right: 10px; }
         .content.compact .toolbar { padding-left: 10px; }
