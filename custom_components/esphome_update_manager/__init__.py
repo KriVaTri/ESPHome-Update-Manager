@@ -345,6 +345,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             sidebar_title="ESPHome Updates",
             sidebar_icon="mdi:cellphone-arrow-down",
             frontend_url_path="esphome-update-manager",
+            require_admin=True,
             config={
                 "_panel_custom": {
                     "name": "esphome-update-panel",
@@ -3471,6 +3472,7 @@ async def _get_yaml_project_version(hass: HomeAssistant, device: dict) -> str | 
         vol.Optional("force_install_devices"): vol.Any(list, None),
     }
 )
+@websocket_api.require_admin
 @websocket_api.async_response
 async def ws_start_updates(hass, connection, msg):
     queue: UpdateQueue = hass.data[DOMAIN]["queue"]
@@ -3514,6 +3516,7 @@ async def ws_start_updates(hass, connection, msg):
         connection.send_error(msg["id"], "already_running", str(err))
 
 @websocket_api.websocket_command({"type": "esphome_update_manager/cancel"})
+@websocket_api.require_admin
 @callback
 def ws_cancel_updates(hass, connection, msg):
     _LOGGER.debug("WebSocket: cancel updates requested")
@@ -3545,6 +3548,7 @@ def ws_get_status(hass, connection, msg):
         "entity_id": str,
     }
 )
+@websocket_api.require_admin
 @callback
 def ws_enable_entity(hass, connection, msg):
     registry = er.async_get(hass)
@@ -3580,6 +3584,7 @@ def ws_enable_entity(hass, connection, msg):
 
 
 @websocket_api.websocket_command({"type": "esphome_update_manager/clear_results"})
+@websocket_api.require_admin
 @callback
 def ws_clear_results(hass, connection, msg):
     queue: UpdateQueue = hass.data[DOMAIN]["queue"]
@@ -3629,6 +3634,7 @@ def ws_get_auto_update_settings(hass, connection, msg):
         vol.Optional("auto_update_scope"): vol.In(["firmware", "project", "both"]),
     }
 )
+@websocket_api.require_admin
 @websocket_api.async_response
 async def ws_set_auto_update_settings(hass, connection, msg):
     """Set auto-update settings."""
@@ -3677,6 +3683,7 @@ async def ws_set_auto_update_settings(hass, connection, msg):
 
 
 @websocket_api.websocket_command({"type": "esphome_update_manager/refresh_project_versions"})
+@websocket_api.require_admin
 @websocket_api.async_response
 async def ws_refresh_project_versions(hass, connection, msg):
     """Manual refresh: dashboards + project versions + pending + auto-update kick."""
@@ -3834,6 +3841,7 @@ async def ws_subscribe_devices_updated(hass, connection, msg):
         "device_ids": vol.All(vol.Coerce(list), [str]),
     }
 )
+@websocket_api.require_admin
 @websocket_api.async_response
 async def ws_add_pending_force_install(hass, connection, msg):
     """Add devices to the pending force install list."""
@@ -3871,6 +3879,7 @@ async def ws_add_pending_force_install(hass, connection, msg):
         "device_id": str,
     }
 )
+@websocket_api.require_admin
 @websocket_api.async_response
 async def ws_remove_pending_force_install(hass, connection, msg):
     """Remove a device from the pending force install list."""
@@ -3895,6 +3904,7 @@ async def ws_remove_pending_force_install(hass, connection, msg):
         "device_ids": vol.All(vol.Coerce(list), [str]),
     }
 )
+@websocket_api.require_admin
 @websocket_api.async_response
 async def ws_set_excluded_devices(hass, connection, msg):
     """Replace the entire excluded devices list."""
