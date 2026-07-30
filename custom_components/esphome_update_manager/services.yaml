@@ -74,6 +74,25 @@ compile:
           multiple: true
           integration: esphome
 
+get_device_status:
+  name: Get Device Status
+  description: >-
+    Check whether one or more devices currently have a pending or running
+    force install queued by the integration. Returns a response with
+    pending/running/active flags per device — useful in automations that
+    need to know whether to wait for an update before acting (e.g. deep
+    sleep devices).
+  fields:
+    device_id:
+      name: Device(s)
+      description: One or more Home Assistant device IDs to check.
+      required: true
+      example: "['abc123def456']"
+      selector:
+        device:
+          multiple: true
+          integration: esphome
+
 upload:
   name: OTA upload firmware
   description: >-
