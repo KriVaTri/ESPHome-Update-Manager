@@ -643,7 +643,7 @@ Clicking the link opens the panel and automatically displays the latest update l
 
 ## Deep sleep devices
 
-The pending force install feature is especially useful for **battery-powered deep sleep devices** that are offline most of the time and only briefly online to report data. By combining pending force install with a small Home Assistant automation, firmware updates can be fully automated for these devices: queue them once, and the next time they wake up they will be flashed and put back to sleep automatically.
+By combining the integration with a small Home Assistant automation, firmware updates and force installs can be fully automated for these devices: the next time they wake up they will be flashed and put back to sleep automatically, respecting the awake window configured in the automation.
 
 ### Requirements per device
 
@@ -657,7 +657,7 @@ Each deep sleep device must expose:
        name: "Status"
    ```
 
-2. **A deep sleep button** the automation can press. The entity_id must contain `deep_sleep`, `deepsleep`, or have `sleep` in its friendly name. The deep sleep block must **not** define a `run_duration`, so the device stays awake until the button is pressed:
+2. **A deep sleep button** the automation can press. The entity_id must contain `deep_sleep`, `deepsleep`, or have `sleep` in its friendly name. The deep sleep block must **not** define a `run_duration`, so the device stays awake until the button is pressed by the automation (the awake window must be configured in the automation instead):
 
    ```yaml
    deep_sleep:
@@ -675,77 +675,151 @@ Each deep sleep device must expose:
 
 > **Note:** Without a status binary sensor, the automation cannot reliably detect when the device is back online after the OTA reboot, and the deep sleep button will not be pressed.
 
-### Workflow
-
-1. In the panel, switch to **Force Install** mode and select one or more offline deep sleep devices, then confirm. They appear with the **Pending** label.
-2. The next time a pending device wakes up, the integration starts the force install automatically. Multiple devices waking up within ~15 seconds are batched into a single run.
-3. After the install finishes, the automation below presses the deep sleep button so the device returns to sleep until the next wake cycle.
-
 ### Automation
 
-This single automation handles **all** deep sleep devices simultaneously. It only triggers after a force install — regular updates and devices that wake up without a pending force install are not affected.
+This single automation handles **all** deep sleep devices simultaneously.
 
 ```yaml
-alias: Deep sleep after force install
+alias: Deep sleep after wake-up or update
 description: >
-  Presses the deep sleep button of every device that just completed a force
-  install (successful or not). Works automatically for multiple devices at once.
-triggers:
-  - event_type: esphome_update_manager_finished
-    trigger: event
-actions:
-  - variables:
-      force_devices: |
-        {{ trigger.event.data.results
-           | selectattr('is_force_install', 'eq', true)
-           | selectattr('device_id', 'defined')
-           | list }}
-  - choose:
-      - conditions:
-          - condition: template
-            value_template: "{{ force_devices | length > 0 }}"
-        sequence:
-          - repeat:
-              for_each: "{{ force_devices }}"
-              sequence:
-                - wait_template: >
-                    {% set ns = namespace(online=false) %}
-                    {% for e in states.binary_sensor
-                       if e.entity_id.endswith('_status')
-                       and device_id(e.entity_id) == repeat.item.device_id %}
-                      {% if e.state == 'on' %}{% set ns.online = true %}{% endif %}
-                    {% endfor %}
-                    {{ ns.online }}
-                  timeout: "00:03:00"
-                  continue_on_timeout: true
-                - delay: "00:00:03"
-                - variables:
-                    deep_sleep_btn: >
-                      {% set ns = namespace(found=none) %}
-                      {% for e in states.button
-                         if device_id(e.entity_id) == repeat.item.device_id
-                         and ('deep_sleep' in e.entity_id
-                              or 'deepsleep' in e.entity_id
-                              or 'sleep' in (e.attributes.friendly_name | lower)) %}
-                        {% set ns.found = e.entity_id %}
-                      {% endfor %}
-                      {{ ns.found }}
-                - choose:
-                    - conditions:
-                        - condition: template
-                          value_template: "{{ deep_sleep_btn != none }}"
-                      sequence:
-                        - target:
-                            entity_id: "{{ deep_sleep_btn }}"
-                          action: button.press
-mode: single
+  Handles ALL deep sleep devices. On every wake-up (normal wake AND the
+  reboot after an install), the device gets its full awake_window_seconds
+  before being put back to sleep — unless an update is pending/running,
+  in which case it stays awake until that update finishes (then still
+  gets its awake_window_seconds before sleeping).
+mode: parallel
+max: 10   # bump this if more than 10 deep sleep devices could wake up at once
 max_exceeded: silent
+variables:
+  awake_window_seconds: 120   # <- your normal "awake to do tasks" window,
+                               # applied both on a normal wake-up and after
+                               # an install + reboot
+triggers:
+  - id: wake
+    trigger: state
+    entity_id:
+      - binary_sensor.device1_status # change to your device status sensor
+      - binary_sensor.device2_status # change to your device status sensor
+      # add one line per deep sleep device's status sensor here
+    to: "on"
+  - id: finished
+    trigger: event
+    event_type: esphome_update_manager_finished
+actions:
+  - choose:
+      # ── Branch 1: device just woke up ──────────────────────────────
+      - conditions:
+          - condition: trigger
+            id: wake
+        sequence:
+          - variables:
+              wake_last_changed: "{{ trigger.to_state.last_changed }}"
+          - delay: "{{ awake_window_seconds }}"
+          - condition: template
+            value_template: >
+              {{ states(trigger.entity_id) is not none
+                 and state_attr(trigger.entity_id, 'friendly_name') is not none
+                 and (states[trigger.entity_id].last_changed | string) == (wake_last_changed | string) }}
+            # ^ if this is false, the sensor flipped again during our wait
+            #   (a reboot happened) — a newer run or the finished-tak is
+            #   already handling this device, so we stop here silently
+          - action: esphome_update_manager.get_device_status
+            data:
+              device_id: "{{ device_id(trigger.entity_id) }}"
+            response_variable: dev_status
+          - if:
+              - condition: template
+                value_template: >
+                  {{ not dev_status.devices.get(device_id(trigger.entity_id), {}).get('active', false) }}
+            then:
+              - variables:
+                  deep_sleep_btn: >
+                    {% set ns = namespace(found=none) %}
+                    {% for e in states.button
+                       if device_id(e.entity_id) == device_id(trigger.entity_id)
+                       and ('deep_sleep' in e.entity_id
+                            or 'deepsleep' in e.entity_id
+                            or 'sleep' in (e.attributes.friendly_name | lower)) %}
+                      {% set ns.found = e.entity_id %}
+                    {% endfor %}
+                    {{ ns.found }}
+              - if:
+                  - condition: template
+                    value_template: "{{ deep_sleep_btn != none }}"
+                then:
+                  - target:
+                      entity_id: "{{ deep_sleep_btn }}"
+                    action: button.press
+
+      # ── Branch 2: an update batch just finished (force install OR
+      #    regular auto-update / manual update) ───────────────────────
+      - conditions:
+          - condition: trigger
+            id: finished
+        sequence:
+          - variables:
+              finished_devices: |
+                {{ trigger.event.data.results
+                   | selectattr('device_id', 'defined')
+                   | list }}
+          - if:
+              - condition: template
+                value_template: "{{ finished_devices | length > 0 }}"
+            then:
+              - repeat:
+                  for_each: "{{ finished_devices }}"
+                  sequence:
+                    # Wait for the device to come back online after reboot
+                    - wait_template: >
+                        {% set ns = namespace(online=false) %}
+                        {% for e in states.binary_sensor
+                           if e.entity_id.endswith('_status')
+                           and device_id(e.entity_id) == repeat.item.device_id %}
+                          {% if e.state == 'on' %}{% set ns.online = true %}{% endif %}
+                        {% endfor %}
+                        {{ ns.online }}
+                      timeout: "00:03:00"
+                      continue_on_timeout: true
+                    # Give it its normal awake window (device does its
+                    # tasks now, on this reboot's wake cycle)
+                    - delay: "{{ awake_window_seconds }}"
+                    # Final safety check before sleeping — in case
+                    # something new got queued for it in the meantime
+                    - action: esphome_update_manager.get_device_status
+                      data:
+                        device_id: "{{ repeat.item.device_id }}"
+                      response_variable: dev_status2
+                    - if:
+                        - condition: template
+                          value_template: >
+                            {{ not dev_status2.devices.get(repeat.item.device_id, {}).get('active', false) }}
+                      then:
+                        - variables:
+                            deep_sleep_btn: >
+                              {% set ns = namespace(found=none) %}
+                              {% for e in states.button
+                                 if device_id(e.entity_id) == repeat.item.device_id
+                                 and ('deep_sleep' in e.entity_id
+                                      or 'deepsleep' in e.entity_id
+                                      or 'sleep' in (e.attributes.friendly_name | lower)) %}
+                                {% set ns.found = e.entity_id %}
+                              {% endfor %}
+                              {{ ns.found }}
+                        - if:
+                            - condition: template
+                              value_template: "{{ deep_sleep_btn != none }}"
+                            then:
+                              - target:
+                                  entity_id: "{{ deep_sleep_btn }}"
+                                action: button.press
 ```
 
-**How it stays safe:**
-- The automation triggers on the `esphome_update_manager_finished` event and filters on `is_force_install: true`. Regular updates (auto-update, manual update via the panel, `start_updates` service) do **not** match and will not put devices to sleep.
-- Devices that wake up but are **not** in the pending list are never touched — the integration does not even fire the event in that case.
-- If a device has no matching deep sleep button, the automation does nothing for that device.
+**Operation of deep sleep devices in combination with the automation:**
+
+- If the device wakes and there is no update or force-install pending → enter deep sleep after the time configured in the automation.
+- If the device wakes and there is a firmware update, but the device is excluded → enter deep sleep after the time configured in the automation.
+- If the device wakes and there is a firmware update and the device is not excluded → the update is performed; after reboot, return to deep sleep after the time configured in the automation.
+- If the device wakes and a force-install is pending → the install is performed; after reboot, return to deep sleep after the time configured in the automation.
 
 ## Error handling
 
