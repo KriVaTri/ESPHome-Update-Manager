@@ -820,6 +820,7 @@ actions:
 - If the device wakes and there is a firmware update, but the device is excluded → enter deep sleep after the time configured in the automation.
 - If the device wakes and there is a firmware update and the device is not excluded → the update is performed; after reboot, return to deep sleep after the time configured in the automation.
 - If the device wakes and a force-install is pending → the install is performed; after reboot, return to deep sleep after the time configured in the automation.
+- When the update or install fails -> return to deep sleep after the time configured in the automation.
 
 ## Error handling
 
