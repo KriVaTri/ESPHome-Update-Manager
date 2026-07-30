@@ -17,7 +17,7 @@ from packaging.version import parse as parse_version
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.components import websocket_api
 from homeassistant.components.frontend import async_register_built_in_panel
-from homeassistant.core import HomeAssistant, callback, Event, ServiceCall
+from homeassistant.core import HomeAssistant, callback, Event, ServiceCall, SupportsResponse
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import device_registry as dr
@@ -36,6 +36,8 @@ from .const import (
     CONF_DASHBOARD_PASSWORD,
     DASHBOARD_MODE_LOCAL,
     DASHBOARD_MODE_EXTERNAL,
+    STATUS_QUEUED,
+    STATUS_RUNNING,
 )
 from .dashboard import ExternalDashboardCoordinator, LocalDashboardCoordinator
 from .update_queue import UpdateQueue
@@ -547,6 +549,41 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "refresh_project_versions",
         _handle_refresh_project_versions,
         schema=vol.Schema({}),
+    )
+
+    # Device status service (for use in automations, e.g. deep sleep handling)
+    async def _handle_get_device_status(call: ServiceCall) -> dict:
+        device_ids = call.data["device_id"]
+        settings = hass.data[DOMAIN].get("settings", {})
+        pending: dict = settings.get("pending_force_installs", {})
+
+        queue: UpdateQueue = hass.data[DOMAIN]["queue"]
+        running_ids = {
+            r["device_id"]
+            for r in queue.results
+            if r.get("device_id") and r["status"] in (STATUS_QUEUED, STATUS_RUNNING)
+        }
+
+        devices = {}
+        for device_id in device_ids:
+            is_pending = device_id in pending
+            is_running = device_id in running_ids
+            devices[device_id] = {
+                "pending": is_pending,
+                "running": is_running,
+                "active": is_pending or is_running,
+            }
+
+        return {"devices": devices}
+
+    hass.services.async_register(
+        DOMAIN,
+        "get_device_status",
+        _handle_get_device_status,
+        schema=vol.Schema({
+            vol.Required("device_id"): vol.All(cv.ensure_list, [cv.string]),
+        }),
+        supports_response=SupportsResponse.ONLY,
     )
 
     # Setup auto-update listener if enabled (after HA is fully started)
@@ -1168,6 +1205,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.services.async_remove(DOMAIN, "start_updates")
     hass.services.async_remove(DOMAIN, "force_install")
     hass.services.async_remove(DOMAIN, "refresh_project_versions")
+    hass.services.async_remove(DOMAIN, "get_device_status")
     hass.services.async_remove(DOMAIN, "clean_build_files")
     hass.services.async_remove(DOMAIN, "compile")
     hass.services.async_remove(DOMAIN, "upload")
