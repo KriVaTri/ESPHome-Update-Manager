@@ -875,7 +875,7 @@ The integration handles various failure scenarios gracefully:
 
 **How to switch:**
 1. Add or remove the YAML from the desired dashboard
-2. Remove and re-add the device entry in the ESPHome integration (No restart of Home Assistant is required)
+2. Remove the device and re-add the device entry in the ESPHome integration (it is recommended to restart HA before re-adding the device)
 
 > **Note:** After adding a YAML to the local dashboard, it may take a moment before HA creates the update entity.
 >
