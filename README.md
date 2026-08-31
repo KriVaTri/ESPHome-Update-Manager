@@ -862,7 +862,7 @@ The integration handles various failure scenarios gracefully:
 
 ## Troubleshooting
 
-## Switching devices between local and external dashboard
+## Migration: switching devices between local and external dashboard
 
 **Behavior:**
 
