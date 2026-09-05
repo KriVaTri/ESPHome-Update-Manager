@@ -165,16 +165,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     # Cleanup remembered external devices that no longer exist in HA
     async def _cleanup_remembered_devices(_hass: HomeAssistant) -> None:
-        dev_reg = dr.async_get(hass)
-        esphome_device_ids = _get_esphome_device_ids(hass)
-        
         current_names: set[str] = set()
-        for device in dev_reg.devices.values():
-            if device.id in esphome_device_ids:
-                if device.name:
-                    current_names.add(_normalize_device_name(device.name))
-                if device.name_by_user:
-                    current_names.add(_normalize_device_name(device.name_by_user))
+        for device in _get_esphome_devices(hass):
+            if device.name:
+                current_names.add(_normalize_device_name(device.name))
+            if device.name_by_user:
+                current_names.add(_normalize_device_name(device.name_by_user))
         
         remembered: dict = stored_settings.get("external_devices", {})
         to_remove = [n for n in remembered if n not in current_names]
@@ -212,15 +208,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
         # Check if any remembered device no longer exists in HA
         dev_reg = dr.async_get(hass)
-        esphome_device_ids = _get_esphome_device_ids(hass)
-        
         current_names: set[str] = set()
-        for device in dev_reg.devices.values():
-            if device.id in esphome_device_ids:
-                if device.name:
-                    current_names.add(_normalize_device_name(device.name))
-                if device.name_by_user:
-                    current_names.add(_normalize_device_name(device.name_by_user))
+        for device in _get_esphome_devices(hass):
+            if device.name:
+                current_names.add(_normalize_device_name(device.name))
+            if device.name_by_user:
+                current_names.add(_normalize_device_name(device.name_by_user))
         
         to_remove = [n for n in remembered if n not in current_names]
         if to_remove:
@@ -796,13 +789,12 @@ async def _setup_esphome_runtime_listeners(hass: HomeAssistant) -> None:
 
             # Resolve the device_id for this entry
             device_id = None
-            for device in dev_reg.devices.values():
-                if entry_id in device.config_entries:
-                    # Skip ESPHome sub-devices (parent handles the bump)
-                    if _is_esphome_subdevice(hass, device):
-                        continue
-                    device_id = device.id
-                    break
+            for device in dr.async_entries_for_config_entry(dev_reg, entry_id):
+                # Skip ESPHome sub-devices (parent handles the bump)
+                if _is_esphome_subdevice(hass, device):
+                    continue
+                device_id = device.id
+                break
 
             if not device_id:
                 return
@@ -1256,22 +1248,23 @@ async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
 
 # ── Auto-update logic ──────────────────────────────────────────────
 
+def _get_esphome_devices(hass: HomeAssistant) -> list[dr.DeviceEntry]:
+    """Get all device registry entries that belong to an ESPHome config entry.
+
+    Uses async_entries_for_config_entry() per ESPHome config entry rather than
+    scanning the whole device registry, so it doesn't depend on how iterating
+    dev_reg.devices behaves on a given HA version.
+    """
+    dev_reg = dr.async_get(hass)
+    devices: list[dr.DeviceEntry] = []
+    for entry in hass.config_entries.async_entries("esphome"):
+        devices.extend(dr.async_entries_for_config_entry(dev_reg, entry.entry_id))
+    return devices
+
+
 def _get_esphome_device_ids(hass: HomeAssistant) -> set[str]:
     """Get all device IDs that belong to ESPHome."""
-    dev_reg = dr.async_get(hass)
-    
-    # Get all ESPHome config entry IDs
-    esphome_config_entry_ids: set[str] = set()
-    for entry in hass.config_entries.async_entries("esphome"):
-        esphome_config_entry_ids.add(entry.entry_id)
-    
-    # Find all devices that belong to ESPHome
-    esphome_device_ids: set[str] = set()
-    for device in dev_reg.devices.values():
-        if any(ceid in esphome_config_entry_ids for ceid in device.config_entries):
-            esphome_device_ids.add(device.id)
-    
-    return esphome_device_ids
+    return {device.id for device in _get_esphome_devices(hass)}
 
 
 def _is_esphome_subdevice(hass: HomeAssistant, device: dr.DeviceEntry) -> bool:
@@ -1287,11 +1280,8 @@ def _is_esphome_subdevice(hass: HomeAssistant, device: dr.DeviceEntry) -> bool:
     parent = dev_reg.async_get(device.via_device_id)
     if not parent:
         return False
-    for eid in parent.config_entries:
-        entry = hass.config_entries.async_get_entry(eid)
-        if entry and entry.domain == "esphome":
-            return True
-    return False
+    entry = hass.config_entries.async_get_entry(parent.config_entry_id)
+    return bool(entry and entry.domain == "esphome")
 
 
 def _is_esphome_update_entity(hass: HomeAssistant, entity_id: str) -> bool:
@@ -2345,27 +2335,27 @@ def _get_device_ip(hass: HomeAssistant, device_id: str | None) -> str | None:
     if device is None:
         return None
 
-    for entry in hass.config_entries.async_entries("esphome"):
-        if entry.entry_id not in device.config_entries:
-            continue
-        host = entry.data.get("host")
-        if not host:
-            return None
-        host = str(host).strip()
-        # Strip a trailing port if present (e.g. "192.168.1.50:6053")
-        candidate = host.rsplit(":", 1)[0] if host.count(":") == 1 and "." in host else host
-        try:
-            import ipaddress
-            ipaddress.ip_address(candidate)
-            return candidate
-        except ValueError:
-            # Not a literal IP (probably a hostname) → no benefit, skip
-            _LOGGER.debug(
-                "Device %s host '%s' is not a literal IP, cannot use IP-OTA",
-                device_id, host,
-            )
-            return None
-    return None
+    entry = hass.config_entries.async_get_entry(device.config_entry_id)
+    if entry is None or entry.domain != "esphome":
+        return None
+
+    host = entry.data.get("host")
+    if not host:
+        return None
+    host = str(host).strip()
+    # Strip a trailing port if present (e.g. "192.168.1.50:6053")
+    candidate = host.rsplit(":", 1)[0] if host.count(":") == 1 and "." in host else host
+    try:
+        import ipaddress
+        ipaddress.ip_address(candidate)
+        return candidate
+    except ValueError:
+        # Not a literal IP (probably a hostname) → no benefit, skip
+        _LOGGER.debug(
+            "Device %s host '%s' is not a literal IP, cannot use IP-OTA",
+            device_id, host,
+        )
+        return None
 
 
 def _resolve_ota_port(hass: HomeAssistant, device_id: str | None) -> str:
@@ -2523,14 +2513,13 @@ def _is_device_online(
         return None
 
     try:
-        for entry in hass.config_entries.async_entries("esphome"):
-            if entry.entry_id in device.config_entries:
-                runtime_data = getattr(entry, "runtime_data", None)
-                if runtime_data is not None:
-                    available = getattr(runtime_data, "available", None)
-                    if available is not None:
-                        return bool(available)
-                break
+        entry = hass.config_entries.async_get_entry(device.config_entry_id)
+        if entry is not None and entry.domain == "esphome":
+            runtime_data = getattr(entry, "runtime_data", None)
+            if runtime_data is not None:
+                available = getattr(runtime_data, "available", None)
+                if available is not None:
+                    return bool(available)
     except Exception as err:
         _LOGGER.debug("runtime_data lookup failed for device %s: %s", device_id, err)
 
@@ -2564,15 +2553,9 @@ def _get_device_sw_version_raw(
 
 def _find_ha_device_by_name(hass: HomeAssistant, name: str) -> dr.DeviceEntry | None:
     """Find a HA device by name (for external devices that exist in HA but have no update entity)."""
-    dev_reg = dr.async_get(hass)
-    esphome_device_ids = _get_esphome_device_ids(hass)
-    
     normalized_search = _normalize_device_name(name)
     
-    for device in dev_reg.devices.values():
-        if device.id not in esphome_device_ids:
-            continue
-        
+    for device in _get_esphome_devices(hass):
         device_name = device.name_by_user or device.name
         if device_name and _normalize_device_name(device_name) == normalized_search:
             return device
@@ -2630,21 +2613,20 @@ def _get_esphome_node_name(hass: HomeAssistant, device: dr.DeviceEntry) -> str |
         return None
 
     # 1) Config entry data — populated at integration setup, always available
-    for entry in hass.config_entries.async_entries("esphome"):
-        if entry.entry_id in device.config_entries:
-            node_name = entry.data.get("device_name")
-            if node_name:
-                return str(node_name)
+    entry = hass.config_entries.async_get_entry(device.config_entry_id)
+    if entry is not None and entry.domain == "esphome":
+        node_name = entry.data.get("device_name")
+        if node_name:
+            return str(node_name)
 
-            # 2) Runtime data (available once the device API connected)
-            runtime_data = getattr(entry, "runtime_data", None)
-            if runtime_data is not None:
-                device_info = getattr(runtime_data, "device_info", None)
-                if device_info is not None:
-                    rt_name = getattr(device_info, "name", None)
-                    if rt_name:
-                        return str(rt_name)
-            break
+        # 2) Runtime data (available once the device API connected)
+        runtime_data = getattr(entry, "runtime_data", None)
+        if runtime_data is not None:
+            device_info = getattr(runtime_data, "device_info", None)
+            if device_info is not None:
+                rt_name = getattr(device_info, "name", None)
+                if rt_name:
+                    return str(rt_name)
 
     # 3) Last resort — only correct when no friendly_name is configured
     return device.name
@@ -2944,10 +2926,7 @@ def _get_esphome_update_entities(hass: HomeAssistant) -> list[dict[str, Any]]:
             
     # ── Process ESPHome devices WITHOUT update entity ──────────────────
     # These are devices in ESPHome integration but without firmware entity
-    for device in dev_reg.devices.values():
-        if device.id not in esphome_device_ids:
-            continue
-        
+    for device in _get_esphome_devices(hass):
         # Skip if already processed via update entity
         if device.id in devices_with_update_entity:
             continue
@@ -3074,15 +3053,14 @@ def _get_esphome_update_entities(hass: HomeAssistant) -> list[dict[str, Any]]:
     # ── Cleanup: Remove remembered devices that no longer exist in HA ──────
     # Get all current ESPHome device names (only from HA, not from external dashboard)
     current_esphome_device_names: set[str] = set()
-    for device in dev_reg.devices.values():
-        if device.id in esphome_device_ids:
-            # Add current name (user-defined or original)
-            device_name = device.name_by_user or device.name
-            if device_name:
-                current_esphome_device_names.add(_normalize_device_name(device_name))
-            # Also add original name to prevent cleanup of renamed devices
-            if device.name:
-                current_esphome_device_names.add(_normalize_device_name(device.name))
+    for device in _get_esphome_devices(hass):
+        # Add current name (user-defined or original)
+        device_name = device.name_by_user or device.name
+        if device_name:
+            current_esphome_device_names.add(_normalize_device_name(device_name))
+        # Also add original name to prevent cleanup of renamed devices
+        if device.name:
+            current_esphome_device_names.add(_normalize_device_name(device.name))
     
     # Remove remembered devices that no longer exist in HA
     remembered_to_remove = [
