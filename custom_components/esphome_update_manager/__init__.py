@@ -287,10 +287,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         - Check pending force installs
         - Detect offline→online transitions for devices WITHOUT a status sensor
         and trigger the same checks the status-sensor listener would do.
+        - Re-evaluate the always-on status listener's tracked entity set, so a
+        status sensor that was added/renamed/re-enabled since setup (e.g. a
+        device removed and re-added) gets picked up without requiring a HA
+        restart or integration reload.
         """
         hass.bus.async_fire("esphome_update_manager_devices_updated")
         hass.async_create_task(_check_pending_force_installs(hass))
         hass.async_create_task(_check_api_only_device_transitions(hass))
+        status_handler = hass.data[DOMAIN].get("status_change_handler")
+        if status_handler:
+            _resubscribe_status_listener(hass, status_handler)
 
     unsub_periodic = async_track_time_interval(
         hass, _periodic_device_refresh, timedelta(seconds=60)
@@ -635,6 +642,60 @@ async def _register_lovelace_resource(hass, url):
     except Exception as err:
         _LOGGER.warning("Failed to register lovelace resource: %s", err)
 
+def _get_current_status_entity_ids(hass: HomeAssistant) -> set[str]:
+    """Live snapshot of all ESPHome status-sensor entity_ids (device_class connectivity).
+
+    Always queries the entity registry fresh — safe to call at any time.
+    """
+    ent_reg = er.async_get(hass)
+    esphome_device_ids = _get_esphome_device_ids(hass)
+    return {
+        entity.entity_id
+        for entity in ent_reg.entities.values()
+        if (
+            entity.domain == "binary_sensor"
+            and entity.platform == "esphome"
+            and entity.disabled_by is None
+            and entity.device_id in esphome_device_ids
+            and (entity.device_class or entity.original_device_class) == "connectivity"
+        )
+    }
+
+
+def _resubscribe_status_listener(hass: HomeAssistant, handler) -> None:
+    """(Re)subscribe the always-on status listener if the tracked entity set changed.
+
+    Called once at initial setup, and again periodically from
+    _periodic_device_refresh, so a status sensor that is added, renamed, or
+    re-enabled after the initial setup is picked up automatically — without
+    requiring a Home Assistant restart or an integration reload.
+    """
+    current_ids = _get_current_status_entity_ids(hass)
+    tracked_ids = hass.data[DOMAIN].get("always_on_status_entity_ids", set())
+
+    if current_ids == tracked_ids:
+        return
+
+    old_unsub = hass.data[DOMAIN].get("unsub_always_on_status")
+    if old_unsub:
+        old_unsub()
+
+    if not current_ids:
+        hass.data[DOMAIN]["unsub_always_on_status"] = None
+        hass.data[DOMAIN]["always_on_status_entity_ids"] = set()
+        _LOGGER.debug("No status entities found for always-on status listener")
+        return
+
+    new_unsub = async_track_state_change_event(hass, list(current_ids), handler)
+    hass.data[DOMAIN]["unsub_always_on_status"] = new_unsub
+    hass.data[DOMAIN]["always_on_status_entity_ids"] = current_ids
+    _LOGGER.debug(
+        "Status listener (re)subscribed: %d entities (was %d)",
+        len(current_ids),
+        len(tracked_ids),
+    )
+
+
 async def _delayed_setup_status_listener(hass: HomeAssistant) -> None:
     """Setup status listener always (for project version check)."""
     async def _setup_after_start(_hass: HomeAssistant) -> None:
@@ -647,23 +708,6 @@ async def _delayed_setup_status_listener(hass: HomeAssistant) -> None:
 async def _setup_always_on_status_listener(hass: HomeAssistant) -> None:
     """Setup status listener that is always active, independent of auto-update."""
     ent_reg = er.async_get(hass)
-    esphome_device_ids = _get_esphome_device_ids(hass)
-
-    all_status_entity_ids = [
-        entity.entity_id
-        for entity in ent_reg.entities.values()
-        if (
-            entity.domain == "binary_sensor"
-            and entity.platform == "esphome"
-            and entity.disabled_by is None
-            and entity.device_id in esphome_device_ids
-            and (entity.device_class or entity.original_device_class) == "connectivity"
-        )
-    ]
-
-    if not all_status_entity_ids:
-        _LOGGER.debug("No status entities found for always-on status listener")
-        return
 
     @callback
     def _handle_status_state_change(event: Event) -> None:
@@ -718,13 +762,11 @@ async def _setup_always_on_status_listener(hass: HomeAssistant) -> None:
 
         hass.async_create_task(_refresh_then_check())
 
-    # Subscribe to status sensor state changes (device offline → online)
-    unsub = async_track_state_change_event(
-        hass,
-        all_status_entity_ids,
-        _handle_status_state_change,
-    )
-    hass.data[DOMAIN]["unsub_always_on_status"] = unsub
+    # Subscribe to status sensor state changes (device offline → online).
+    # Keep a reference to the handler so _periodic_device_refresh can
+    # re-evaluate and resubscribe every 60s without duplicating this logic.
+    hass.data[DOMAIN]["status_change_handler"] = _handle_status_state_change
+    _resubscribe_status_listener(hass, _handle_status_state_change)
 
     # Subscribe to external dashboard availability changes
     unsub_dashboard = hass.bus.async_listen(
@@ -742,7 +784,7 @@ async def _setup_always_on_status_listener(hass: HomeAssistant) -> None:
 
     _LOGGER.debug(
         "Always-on status listener active for %d status sensors",
-        len(all_status_entity_ids),
+        len(hass.data[DOMAIN].get("always_on_status_entity_ids", set())),
     )
 
 
@@ -1172,6 +1214,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if unsub_always_on:
         unsub_always_on()
     hass.data[DOMAIN].pop("unsub_always_on_status", None)
+    hass.data[DOMAIN].pop("always_on_status_entity_ids", None)
+    hass.data[DOMAIN].pop("status_change_handler", None)
     unsub_always_on_dashboard = hass.data[DOMAIN].get("unsub_always_on_dashboard")
     if unsub_always_on_dashboard:
         unsub_always_on_dashboard()
