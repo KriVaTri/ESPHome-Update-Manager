@@ -378,13 +378,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             if not device_id:
                 continue
 
-            # Don't track force install failures - user must manually retry
-            if is_force_install:
-                continue
-
+            # Don't track force install *failures* for the auto-update cooldown —
+            # a force install is a deliberate manual action, so a failure there
+            # shouldn't penalize future automatic update attempts.
+            # A *successful* install should still clear a previous failed flag
+            # below, regardless of whether it came from auto-update or a force
+            # install — either way the device is no longer stuck.
             if status == "failed":
-                failed_devices[device_id] = True
-                _LOGGER.debug("Added %s to failed devices - requires manual update", device_id)
+                if not is_force_install:
+                    failed_devices[device_id] = True
+                    _LOGGER.debug("Added %s to failed devices - requires manual update", device_id)
             elif status == "success" and device_id in failed_devices:
                 failed_devices.pop(device_id, None)
                 _LOGGER.debug("Removed %s from failed devices - update succeeded", device_id)
