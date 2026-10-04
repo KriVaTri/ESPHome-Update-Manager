@@ -183,7 +183,9 @@ class UpdateQueue:
         self._phase = PHASE_IDLE
         self._addon_name = None
         self._operation = operation
-        self._task = self.hass.async_create_task(self._run())
+        self._task = self.hass.async_create_background_task(
+            self._run(), "esphome_update_manager_queue"
+        )
 
     def cancel(self) -> None:
         _LOGGER.debug("Cancel requested - setting _cancelled = True (was: %s)", self._cancelled)
