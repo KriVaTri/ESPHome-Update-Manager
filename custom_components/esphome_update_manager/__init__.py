@@ -14,7 +14,7 @@ from datetime import datetime, timedelta
 import voluptuous as vol
 
 from packaging.version import parse as parse_version
-from homeassistant.exceptions import HomeAssistantError
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.components import websocket_api
 from homeassistant.components.frontend import async_register_built_in_panel
 from homeassistant.core import HomeAssistant, callback, Event, ServiceCall, SupportsResponse
@@ -78,7 +78,178 @@ def _get_log_backup_dir(hass: HomeAssistant) -> Path:
 
 async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     hass.data[DOMAIN] = {}
+    _async_register_services(hass)
     return True
+
+
+def _ensure_loaded(hass: HomeAssistant) -> None:
+    """Raise a clear error when an action is called while the entry is not loaded."""
+    if "queue" not in hass.data.get(DOMAIN, {}):
+        raise ServiceValidationError(
+            "ESPHome Update Manager is not loaded. Check Settings → Devices & "
+            "services and the Home Assistant log."
+        )
+
+
+def _async_register_services(hass: HomeAssistant) -> None:
+    """Register the integration's actions.
+
+    Called from async_setup (not async_setup_entry) so the actions always
+    exist, also when the config entry is not (yet) loaded. Automations that
+    reference them then validate correctly, and a call while the entry is
+    not loaded raises a clear error instead of "unknown action".
+    """
+    async def _handle_start_updates(call: ServiceCall) -> None:
+        _ensure_loaded(hass)
+        await async_handle_start_updates(hass, call)
+    
+    hass.services.async_register(
+        DOMAIN,
+        "start_updates",
+        _handle_start_updates,
+        schema=vol.Schema({
+            vol.Optional("entity_ids"): vol.All(cv.ensure_list, [cv.entity_id]),
+            vol.Optional("stop_addon"): cv.boolean,
+        }),
+    )
+
+    # Force install service
+    async def _handle_force_install(call: ServiceCall) -> None:
+        _ensure_loaded(hass)
+        await async_handle_force_install(hass, call)
+    
+    hass.services.async_register(
+        DOMAIN,
+        "force_install",
+        _handle_force_install,
+        schema=vol.Schema({
+            vol.Required("device_id"): vol.All(cv.ensure_list, [cv.string]),
+        }),
+    )
+
+    # Clean build files service
+    async def _handle_clean_build_files(call: ServiceCall) -> None:
+        _ensure_loaded(hass)
+        await _handle_device_operation(hass, call, "clean")
+
+    hass.services.async_register(
+        DOMAIN,
+        "clean_build_files",
+        _handle_clean_build_files,
+        schema=vol.Schema({
+            vol.Optional("device_id"): vol.All(cv.ensure_list, [cv.string]),
+        }),
+    )
+
+    # Compile only service
+    async def _handle_compile(call: ServiceCall) -> None:
+        _ensure_loaded(hass)
+        await _handle_device_operation(hass, call, "compile")
+
+    hass.services.async_register(
+        DOMAIN,
+        "compile",
+        _handle_compile,
+        schema=vol.Schema({
+            vol.Optional("device_id"): vol.All(cv.ensure_list, [cv.string]),
+        }),
+    )
+
+    # OTA upload only service
+    async def _handle_upload(call: ServiceCall) -> None:
+        _ensure_loaded(hass)
+        await _handle_device_operation(hass, call, "upload")
+
+    hass.services.async_register(
+        DOMAIN,
+        "upload",
+        _handle_upload,
+        schema=vol.Schema({
+            vol.Optional("device_id"): vol.All(cv.ensure_list, [cv.string]),
+        }),
+    )
+
+    # Refresh project versions service (for use in automations)
+    async def _handle_refresh_project_versions(call: ServiceCall) -> None:
+        _ensure_loaded(hass)
+        local_coordinator = hass.data[DOMAIN].get("local_dashboard")
+        if local_coordinator:
+            try:
+                await local_coordinator.async_request_refresh()
+            except Exception as err:
+                _LOGGER.debug("Local dashboard refresh failed during service call: %s", err)
+
+        external_coordinator = hass.data[DOMAIN].get("external_dashboard")
+        if external_coordinator:
+            try:
+                await external_coordinator.async_request_refresh()
+            except Exception as err:
+                _LOGGER.debug("External dashboard refresh failed during service call: %s", err)
+
+        await _check_all_devices_project_version(hass)
+        await _check_pending_force_installs(hass)
+        await _check_and_start_auto_update(hass)
+        hass.bus.async_fire("esphome_update_manager_devices_updated")
+        _LOGGER.info("refresh_project_versions service triggered")
+
+    hass.services.async_register(
+        DOMAIN,
+        "refresh_project_versions",
+        _handle_refresh_project_versions,
+        schema=vol.Schema({}),
+    )
+
+    # Device status service (for use in automations, e.g. deep sleep handling)
+    async def _handle_get_device_status(call: ServiceCall) -> dict:
+        device_ids = call.data["device_id"]
+
+        # Not loaded (e.g. during a restart or reload): report every device as
+        # inactive instead of failing. A deep sleep automation can then still
+        # put the device to sleep; pending force installs are stored and are
+        # picked up again on the next wake-up.
+        if "queue" not in hass.data.get(DOMAIN, {}):
+            _LOGGER.warning(
+                "get_device_status called while ESPHome Update Manager is not "
+                "loaded; reporting all devices as inactive"
+            )
+            return {
+                "devices": {
+                    device_id: {"pending": False, "running": False, "active": False}
+                    for device_id in device_ids
+                }
+            }
+
+        settings = hass.data[DOMAIN].get("settings", {})
+        pending: dict = settings.get("pending_force_installs", {})
+
+        queue: UpdateQueue = hass.data[DOMAIN]["queue"]
+        running_ids = {
+            r["device_id"]
+            for r in queue.results
+            if r.get("device_id") and r["status"] in (STATUS_QUEUED, STATUS_RUNNING)
+        }
+
+        devices = {}
+        for device_id in device_ids:
+            is_pending = device_id in pending
+            is_running = device_id in running_ids
+            devices[device_id] = {
+                "pending": is_pending,
+                "running": is_running,
+                "active": is_pending or is_running,
+            }
+
+        return {"devices": devices}
+
+    hass.services.async_register(
+        DOMAIN,
+        "get_device_status",
+        _handle_get_device_status,
+        schema=vol.Schema({
+            vol.Required("device_id"): vol.All(cv.ensure_list, [cv.string]),
+        }),
+        supports_response=SupportsResponse.ONLY,
+    )
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -458,136 +629,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     unsub_finished = hass.bus.async_listen("esphome_update_manager_finished", _handle_update_finished)
     hass.data[DOMAIN]["unsub_finished"] = unsub_finished
-
-    # Register services
-    async def _handle_start_updates(call: ServiceCall) -> None:
-        await async_handle_start_updates(hass, call)
-    
-    hass.services.async_register(
-        DOMAIN,
-        "start_updates",
-        _handle_start_updates,
-        schema=vol.Schema({
-            vol.Optional("entity_ids"): vol.All(cv.ensure_list, [cv.entity_id]),
-            vol.Optional("stop_addon"): cv.boolean,
-        }),
-    )
-
-    # Force install service
-    async def _handle_force_install(call: ServiceCall) -> None:
-        await async_handle_force_install(hass, call)
-    
-    hass.services.async_register(
-        DOMAIN,
-        "force_install",
-        _handle_force_install,
-        schema=vol.Schema({
-            vol.Required("device_id"): vol.All(cv.ensure_list, [cv.string]),
-        }),
-    )
-
-    # Clean build files service
-    async def _handle_clean_build_files(call: ServiceCall) -> None:
-        await _handle_device_operation(hass, call, "clean")
-
-    hass.services.async_register(
-        DOMAIN,
-        "clean_build_files",
-        _handle_clean_build_files,
-        schema=vol.Schema({
-            vol.Optional("device_id"): vol.All(cv.ensure_list, [cv.string]),
-        }),
-    )
-
-    # Compile only service
-    async def _handle_compile(call: ServiceCall) -> None:
-        await _handle_device_operation(hass, call, "compile")
-
-    hass.services.async_register(
-        DOMAIN,
-        "compile",
-        _handle_compile,
-        schema=vol.Schema({
-            vol.Optional("device_id"): vol.All(cv.ensure_list, [cv.string]),
-        }),
-    )
-
-    # OTA upload only service
-    async def _handle_upload(call: ServiceCall) -> None:
-        await _handle_device_operation(hass, call, "upload")
-
-    hass.services.async_register(
-        DOMAIN,
-        "upload",
-        _handle_upload,
-        schema=vol.Schema({
-            vol.Optional("device_id"): vol.All(cv.ensure_list, [cv.string]),
-        }),
-    )
-
-    # Refresh project versions service (for use in automations)
-    async def _handle_refresh_project_versions(call: ServiceCall) -> None:
-        local_coordinator = hass.data[DOMAIN].get("local_dashboard")
-        if local_coordinator:
-            try:
-                await local_coordinator.async_request_refresh()
-            except Exception as err:
-                _LOGGER.debug("Local dashboard refresh failed during service call: %s", err)
-
-        external_coordinator = hass.data[DOMAIN].get("external_dashboard")
-        if external_coordinator:
-            try:
-                await external_coordinator.async_request_refresh()
-            except Exception as err:
-                _LOGGER.debug("External dashboard refresh failed during service call: %s", err)
-
-        await _check_all_devices_project_version(hass)
-        await _check_pending_force_installs(hass)
-        await _check_and_start_auto_update(hass)
-        hass.bus.async_fire("esphome_update_manager_devices_updated")
-        _LOGGER.info("refresh_project_versions service triggered")
-
-    hass.services.async_register(
-        DOMAIN,
-        "refresh_project_versions",
-        _handle_refresh_project_versions,
-        schema=vol.Schema({}),
-    )
-
-    # Device status service (for use in automations, e.g. deep sleep handling)
-    async def _handle_get_device_status(call: ServiceCall) -> dict:
-        device_ids = call.data["device_id"]
-        settings = hass.data[DOMAIN].get("settings", {})
-        pending: dict = settings.get("pending_force_installs", {})
-
-        queue: UpdateQueue = hass.data[DOMAIN]["queue"]
-        running_ids = {
-            r["device_id"]
-            for r in queue.results
-            if r.get("device_id") and r["status"] in (STATUS_QUEUED, STATUS_RUNNING)
-        }
-
-        devices = {}
-        for device_id in device_ids:
-            is_pending = device_id in pending
-            is_running = device_id in running_ids
-            devices[device_id] = {
-                "pending": is_pending,
-                "running": is_running,
-                "active": is_pending or is_running,
-            }
-
-        return {"devices": devices}
-
-    hass.services.async_register(
-        DOMAIN,
-        "get_device_status",
-        _handle_get_device_status,
-        schema=vol.Schema({
-            vol.Required("device_id"): vol.All(cv.ensure_list, [cv.string]),
-        }),
-        supports_response=SupportsResponse.ONLY,
-    )
 
     # Setup auto-update listener if enabled (after HA is fully started)
     if stored_settings.get("auto_update_enabled", False):
@@ -1240,15 +1281,9 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data[DOMAIN].pop("unsub_esphome_runtime", None)
     hass.data[DOMAIN].pop("esphome_runtime_available", None)
 
-    # Remove services
-    hass.services.async_remove(DOMAIN, "start_updates")
-    hass.services.async_remove(DOMAIN, "force_install")
-    hass.services.async_remove(DOMAIN, "refresh_project_versions")
-    hass.services.async_remove(DOMAIN, "get_device_status")
-    hass.services.async_remove(DOMAIN, "clean_build_files")
-    hass.services.async_remove(DOMAIN, "compile")
-    hass.services.async_remove(DOMAIN, "upload")
-    
+    # Actions are registered in async_setup and intentionally stay registered;
+    # while unloaded they raise a clear error (see _ensure_loaded).
+
     hass.data[DOMAIN].pop("queue", None)
     hass.data[DOMAIN].pop("store", None)
     hass.data[DOMAIN].pop("settings", None)
